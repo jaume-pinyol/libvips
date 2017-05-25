@@ -13,6 +13,19 @@ I've traced the segfault to this line [https://github.com/jcupitt/libvips/blob/8
 I'f I enable debug mode when compiling libvips then when running the test there is an error in [https://github.com/jcupitt/libvips/blob/84270ce787f4d19859f1ceab8d8a9801a865a06a/libvips/iofuncs/type.c#L1409](type.c line 1409)
 `VIPS:ERROR:type.c:1409:vips_value_set_save_string: assertion failed: (G_VALUE_TYPE( value ) == VIPS_TYPE_SAVE_STRING)`
 
+To locally build and run the test
+```bash
+g++ -std=c++11 -g -Wall resize-big-image.cpp `pkg-config vips-cpp --cflags --libs` -Wno-c++11-extensions -o resize
+./bench-resize samples/twin-peaks.jpeg 
+```
+
+To run the test in the failing environment.
+```bash
+docker build -t not_working .
+cd failing-test
+./docker-test.sh
+
+```
 
 Packages installed
 ````
@@ -417,20 +430,7 @@ libxcb.so.1 => /usr/lib64/libxcb.so.1 (0x00007ff49e92a000)
 libXau.so.6 => /usr/lib64/libXau.so.6 (0x00007ff49e726000)
 ````
 
-
-To locally build and run the test
-```bash
-g++ -std=c++11 -g -Wall resize-big-image.cpp `pkg-config vips-cpp --cflags --libs` -Wno-c++11-extensions -o resize
-./bench-resize samples/twin-peaks.jpeg 
-```
-
-To run the test in the failing environment.
-```bash
-docker build -t not_working .
-cd failing-test
-./docker-test.sh
-
-```
+The file ./failing-test/packages-working-installed.txt contains a list of packages where everything works fine.
 
 
 
