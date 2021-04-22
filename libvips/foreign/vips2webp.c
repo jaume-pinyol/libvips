@@ -486,6 +486,7 @@ vips_webp_add_chunks( VipsWebPWrite *write )
 static int 
 vips_webp_add_metadata( VipsWebPWrite *write )
 {
+    printf("Write metadata\n");
 	WebPData data;
 
 	data.bytes = write->memory_writer.mem;
@@ -499,6 +500,7 @@ vips_webp_add_metadata( VipsWebPWrite *write )
 	}
 
 	if( vips_image_get_typeof( write->image, "loop" ) ) {
+	    printf("Write loop\n");
 		int loop;
 
 		if( vips_image_get_int( write->image, "loop", &loop ) )
@@ -510,6 +512,7 @@ vips_webp_add_metadata( VipsWebPWrite *write )
 	 */
 	else if ( vips_image_get_typeof( write->image, "gif-loop" ) ) {
 		int gif_loop;
+		printf("Write gif loop\n");
 
 		if( vips_image_get_int( write->image, "gif-loop", &gif_loop ) )
 			return( -1 );
