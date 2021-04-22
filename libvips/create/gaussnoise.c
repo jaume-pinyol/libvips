@@ -75,7 +75,8 @@ typedef struct _VipsGaussnoise {
 	double mean;
 	double sigma;
 
-	/* Per-image seed. 
+	/* Per-image seed. Each pixel is seeded by this plus the (x,
+	 * y) coordinate.
 	 */
 	guint32 seed;
 } VipsGaussnoise;
@@ -134,14 +135,9 @@ vips_gaussnoise_build( VipsObject *object )
 	vips_image_init_fields( create->out,
 		gaussnoise->width, gaussnoise->height, 1,
 		VIPS_FORMAT_FLOAT, VIPS_CODING_NONE,
-		VIPS_INTERPRETATION_B_W, 1.0, 1.0 );
+		VIPS_INTERPRETATION_MULTIBAND, 1.0, 1.0 );
 	vips_image_pipelinev( create->out, 
 		VIPS_DEMAND_STYLE_ANY, NULL );
-
-	/* The seed for this image. Each pixel is seeded by this plus the (x,
-	 * y) coordinate.
-	 */
-	gaussnoise->seed = UINT_MAX * g_random_double(); 
 
 	if( vips_image_generate( create->out, 
 		NULL, vips_gaussnoise_gen, NULL, gaussnoise, NULL ) )
@@ -196,6 +192,13 @@ vips_gaussnoise_class_init( VipsGaussnoiseClass *class )
 		G_STRUCT_OFFSET( VipsGaussnoise, sigma ),
 		0, 100000, 30 );
 
+	VIPS_ARG_INT( class, "seed", 7, 
+		_( "Seed" ), 
+		_( "Random number seed" ),
+		VIPS_ARGUMENT_OPTIONAL_INPUT,
+		G_STRUCT_OFFSET( VipsGaussnoise, seed ),
+		INT_MIN, INT_MAX, 0 );
+
 }
 
 static void
@@ -203,11 +206,12 @@ vips_gaussnoise_init( VipsGaussnoise *gaussnoise )
 {
 	gaussnoise->mean = 128.0;
 	gaussnoise->sigma = 30.0;
+	gaussnoise->seed = UINT_MAX * g_random_double(); 
 }
 
 /**
  * vips_gaussnoise:
- * @out: output image
+ * @out: (out): output image
  * @width: output width
  * @height: output height
  * @...: %NULL-terminated list of optional named arguments

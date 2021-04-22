@@ -1,6 +1,14 @@
 noinst_LTLIBRARIES = libiofuncs.la
 
 libiofuncs_la_SOURCES = \
+	ginputsource.c \
+	sourceginput.c \
+	connection.c \
+	source.c \
+	sourcecustom.c \
+	target.c \
+	targetcustom.c \
+	sbuf.c \
 	dbuf.c \
 	reorder.c \
 	vipsmarshal.h \
@@ -9,8 +17,6 @@ libiofuncs_la_SOURCES = \
 	gate.c \
 	enumtypes.c \
 	object.c \
-	base64.h \
-	base64.c \
 	error.c \
 	image.c \
 	vips.c \
@@ -37,9 +43,9 @@ libiofuncs_la_SOURCES = \
 	system.c \
 	buffer.c 
 
-vipsmarshal.h:
+vipsmarshal.h: vipsmarshal.list
 	glib-genmarshal --prefix=vips --header vipsmarshal.list > vipsmarshal.h
-vipsmarshal.c:
+vipsmarshal.c: vipsmarshal.list
 	echo "#include \"vipsmarshal.h\"" > vipsmarshal.c 
 	glib-genmarshal --prefix=vips --body vipsmarshal.list >> vipsmarshal.c
 
@@ -70,11 +76,8 @@ vips_scan_headers = \
 	${top_srcdir}/libvips/include/vips/morphology.h \
 	${top_srcdir}/libvips/include/vips/draw.h \
 	${top_srcdir}/libvips/include/vips/basic.h \
-	${top_srcdir}/libvips/include/vips/version.h \
-	${top_srcdir}/libvips/include/vips/object.h
+	${top_srcdir}/libvips/include/vips/object.h \
+	${top_srcdir}/libvips/include/vips/region.h
 
-enumtypes.c: $(vips_scan_headers) Makefile
-	glib-mkenums --template enumtemplate \
-		$(vips_scan_headers) > xgen-getc && \
-	( cmp -s xgen-getc enumtypes.c || cp xgen-getc enumtypes.c ) && \
-	rm -f xgen-getc
+enumtypes.c: $(vips_scan_headers) Makefile.am
+	glib-mkenums --template ${top_srcdir}/libvips/iofuncs/enumtemplate $(vips_scan_headers) > enumtypes.c

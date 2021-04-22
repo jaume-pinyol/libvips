@@ -43,6 +43,14 @@
  * 	- move on top of VipsObject, rename as VipsRegion
  * 23/2/17
  * 	- multiply transparent images through alpha in vips_region_shrink()
+ * 13/6/18 harukizaemon
+ * 	- add VipsRegionShrink parameter to vips_region_shrink()
+ * 9/6/19
+ * 	- saner behaviour for vips_region_fetch() if the request is partly 
+ * 	  outside the image
+ * 22/2/21 f1ac
+ * 	- fix int overflow in vips_region_copy(), could cause crashes with
+ * 	  very wide images
  */
 
 /*
@@ -362,28 +370,6 @@ vips_region_summary( VipsObject *object, VipsBuf *buf )
 	VIPS_OBJECT_CLASS( vips_region_parent_class )->summary( object, buf );
 }
 
-static void
-vips_region_sanity( VipsObject *object, VipsBuf *buf )
-{
-	VipsRegion *region = VIPS_REGION( object );
-
-	(void) vips_object_sanity( VIPS_OBJECT( region->im ) );
-
-	switch( region->im->dtype ) { 
-	case VIPS_IMAGE_PARTIAL:
-		/* Start and stop can be NULL, but not generate.
-		 */
-		if( !region->im->generate_fn )
-			vips_buf_appends( buf, "generate NULL in partial\n" );
-		break;
-	
-	default:
-		break;
-	}
-
-	VIPS_OBJECT_CLASS( vips_region_parent_class )->sanity( object, buf );
-}
-
 /* If a region is being created in one thread (eg. the main thread) and then
  * used in another (eg. a worker thread), the new thread needs to tell VIPS
  * to stop sanity g_assert() fails. The previous owner needs to
@@ -489,7 +475,6 @@ vips_region_class_init( VipsRegionClass *class )
 
 	vobject_class->summary = vips_region_summary;
 	vobject_class->dump = vips_region_dump;
-	vobject_class->sanity = vips_region_sanity;
 	vobject_class->build = vips_region_build;
 }
 
@@ -508,7 +493,7 @@ vips_region_init( VipsRegion *region )
 }
 
 /**
- * vips_region_new:
+ * vips_region_new: (constructor)
  * @image: image to create this region on
  *
  * Create a region. #VipsRegion s start out empty, you need to call 
@@ -525,12 +510,8 @@ vips_region_new( VipsImage *image )
 	 * We can't use the property system, we need to be very threaded.
 	 */
 	g_object_ref( image );
-
 	g_assert( G_OBJECT( image )->ref_count > 1 );
-
-#ifdef DEBUG
 	g_assert( vips_object_sanity( VIPS_OBJECT( image ) ) );
-#endif /*DEBUG*/
 
 	region = VIPS_REGION( g_object_new( VIPS_TYPE_REGION, NULL ) );
 	region->im = image;
@@ -540,9 +521,7 @@ vips_region_new( VipsImage *image )
 		return( NULL );
 	}
 
-#ifdef DEBUG
 	g_assert( vips_object_sanity( VIPS_OBJECT( region ) ) );
-#endif /*DEBUG*/
 
 	return( region ); 
 }
@@ -553,7 +532,7 @@ vips_region_new( VipsImage *image )
  */
 
 /**
- * vips_region_buffer:
+ * vips_region_buffer: (method)
  * @reg: region to operate upon
  * @r: #VipsRect of pixels you need to be able to address
  *
@@ -563,7 +542,7 @@ vips_region_new( VipsImage *image )
  * Returns: 0 on success, or -1 for error.
  */
 int
-vips_region_buffer( VipsRegion *reg, VipsRect *r )
+vips_region_buffer( VipsRegion *reg, const VipsRect *r )
 {
 	VipsImage *im = reg->im;
 
@@ -622,18 +601,18 @@ vips_region_buffer( VipsRegion *reg, VipsRect *r )
 }
 
 /**
- * vips_region_image:
+ * vips_region_image: (method)
  * @reg: region to operate upon
  * @r: #VipsRect of pixels you need to be able to address
  *
- * The region is transformed so that at least @r pixels are available to be read from
- * image. The image needs to be a memory buffer or represent a file
- * on disc that has been mapped or can be mapped. 
+ * The region is transformed so that at least @r pixels are available to be 
+ * read from the image. The image needs to be a memory buffer or represent a 
+ * file on disc that has been mapped or can be mapped. 
  *
  * Returns: 0 on success, or -1 for error.
  */
 int
-vips_region_image( VipsRegion *reg, VipsRect *r )
+vips_region_image( VipsRegion *reg, const VipsRect *r )
 {
 	VipsImage *image = reg->im;
 
@@ -652,23 +631,21 @@ vips_region_image( VipsRegion *reg, VipsRect *r )
 	all.height = image->Ysize;
 	vips_rect_intersectrect( r, &all, &clipped );
 
-	/* Test for empty.
-	 */
 	if( vips_rect_isempty( &clipped ) ) {
 		vips_error( "VipsRegion", 
 			"%s", _( "valid clipped to nothing" ) );
 		return( -1 );
 	}
 
-	VIPS_FREEF( vips_buffer_unref, reg->buffer );
-	VIPS_FREEF( vips_window_unref, reg->window );
 	reg->invalid = FALSE;
+	VIPS_FREEF( vips_buffer_unref, reg->buffer );
 
 	if( image->data ) {
 		/* We have the whole image available ... easy!
 		 */
+		VIPS_FREEF( vips_window_unref, reg->window );
 
-		/* We can't just set valid = clipped, since this may be an
+		/* We can't just set valid = whole image, since this may be an
 		 * incompletely calculated memory buffer. Just set valid to r.
 		 */
 		reg->valid = clipped;
@@ -679,17 +656,10 @@ vips_region_image( VipsRegion *reg, VipsRect *r )
 	else if( image->dtype == VIPS_IMAGE_OPENIN ) {
 		/* No complete image data ... but we can use a rolling window.
 		 */
-		if( reg->type != VIPS_REGION_WINDOW || 
-			!reg->window ||
-			reg->window->top > clipped.top ||
-			reg->window->top + reg->window->height < 
-				clipped.top + clipped.height ) {
-			if( !(reg->window = vips_window_ref( image, 
-				clipped.top, clipped.height )) )
-				return( -1 );
-
-			reg->type = VIPS_REGION_WINDOW;
-		}
+		reg->type = VIPS_REGION_WINDOW;
+		if( !(reg->window = vips_window_take( reg->window, image, 
+			clipped.top, clipped.height )) )
+			return( -1 );
 
 		/* Note the area the window actually represents.
 		 */
@@ -701,6 +671,8 @@ vips_region_image( VipsRegion *reg, VipsRect *r )
 		reg->data = reg->window->data;
 	}
 	else {
+		VIPS_FREEF( vips_window_unref, reg->window );
+
 		vips_error( "VipsRegion", "%s", _( "bad image type" ) );
 		return( -1 );
 	}
@@ -709,7 +681,7 @@ vips_region_image( VipsRegion *reg, VipsRect *r )
 }
 
 /**
- * vips_region_region:
+ * vips_region_region: (method)
  * @reg: region to operate upon
  * @dest: region to connect to
  * @r: #VipsRect of pixels you need to be able to address
@@ -725,16 +697,15 @@ vips_region_image( VipsRegion *reg, VipsRect *r )
  * Performs all clipping necessary to ensure that @reg->valid is indeed
  * valid.
  *
- * If the region we attach to is moved or destroyed, we can be left with dangling 
- * pointers! If the region we attach to is on another image, the two images 
- * must have 
- * the same sizeof( pel ).
+ * If the region we attach to is moved or destroyed, we can be left with 
+ * dangling pointers! If the region we attach to is on another image, the 
+ * two images must have the same sizeof( pel ).
  *
  * Returns: 0 on success, or -1 for error.
  */
 int
 vips_region_region( VipsRegion *reg, 
-	VipsRegion *dest, VipsRect *r, int x, int y )
+	VipsRegion *dest, const VipsRect *r, int x, int y )
 {
 	VipsRect image;
 	VipsRect wanted;
@@ -829,7 +800,7 @@ vips_region_region( VipsRegion *reg,
  * Do two regions point to the same piece of image? ie. 
  *
  * |[
- * 	VIPS_REGION_ADDR( reg1, x, y ) == VIPS_REGION_ADDR( reg2, x, y ) &amp;&amp;
+ * 	VIPS_REGION_ADDR( reg1, x, y ) == VIPS_REGION_ADDR( reg2, x, y ) &&
  * 	*VIPS_REGION_ADDR( reg1, x, y ) == 
  * 		*VIPS_REGION_ADDR( reg2, x, y ) for all x, y, reg1, reg2.
  * ]|
@@ -845,7 +816,7 @@ vips_region_equalsregion( VipsRegion *reg1, VipsRegion *reg2 )
 }
 
 /**
- * vips_region_position:
+ * vips_region_position: (method)
  * @reg: region to operate upon
  * @x: position to move to
  * @y: position to move to
@@ -885,7 +856,8 @@ vips_region_position( VipsRegion *reg, int x, int y )
 }
 
 int
-vips_region_fill( VipsRegion *reg, VipsRect *r, VipsRegionFillFn fn, void *a )
+vips_region_fill( VipsRegion *reg, 
+	const VipsRect *r, VipsRegionFillFn fn, void *a )
 {
 	g_assert( reg->im->dtype == VIPS_IMAGE_PARTIAL );
 	g_assert( reg->im->generate_fn );
@@ -928,7 +900,7 @@ vips_region_fill( VipsRegion *reg, VipsRect *r, VipsRegionFillFn fn, void *a )
 }
 
 /**
- * vips_region_paint:
+ * vips_region_paint: (method)
  * @reg: region to operate upon
  * @r: area to paint
  * @value: value to paint
@@ -947,7 +919,7 @@ vips_region_fill( VipsRegion *reg, VipsRect *r, VipsRegionFillFn fn, void *a )
  * See also: vips_region_black().
  */
 void
-vips_region_paint( VipsRegion *reg, VipsRect *r, int value )
+vips_region_paint( VipsRegion *reg, const VipsRect *r, int value )
 {
 	VipsRect clipped;
 
@@ -997,7 +969,7 @@ vips_region_paint( VipsRegion *reg, VipsRect *r, int value )
 }
 
 /**
- * vips_region_paint_pel:
+ * vips_region_paint_pel: (method)
  * @reg: region to operate upon
  * @r: area to paint
  * @ink: value to paint
@@ -1011,7 +983,7 @@ vips_region_paint( VipsRegion *reg, VipsRect *r, int value )
  * See also: vips_region_paint().
  */
 void
-vips_region_paint_pel( VipsRegion *reg, VipsRect *r, VipsPel *ink )
+vips_region_paint_pel( VipsRegion *reg, const VipsRect *r, const VipsPel *ink )
 {
 	VipsRect ovl;
 
@@ -1048,7 +1020,7 @@ vips_region_paint_pel( VipsRegion *reg, VipsRect *r, VipsPel *ink )
 }
 
 /**
- * vips_region_black:
+ * vips_region_black: (method)
  * @reg: region to operate upon
  *
  * Paints 0 into the valid part of @reg.
@@ -1064,7 +1036,7 @@ vips_region_black( VipsRegion *reg )
 /**
  * vips_region_copy:
  * @reg: source region 
- * @dest: destination region 
+ * @dest: (inout): destination region 
  * @r: #VipsRect of pixels you need to copy
  * @x: postion of @r in @dest
  * @y: postion of @r in @dest
@@ -1076,14 +1048,16 @@ vips_region_black( VipsRegion *reg )
  * See also: vips_region_paint().
  */
 void
-vips_region_copy( VipsRegion *reg, VipsRegion *dest, VipsRect *r, int x, int y )
+vips_region_copy( VipsRegion *reg, 
+	VipsRegion *dest, const VipsRect *r, int x, int y )
 {
-	int z;
-	int len = VIPS_IMAGE_SIZEOF_PEL( reg->im ) * r->width;
+	size_t len = VIPS_IMAGE_SIZEOF_PEL( reg->im ) * r->width;
 	VipsPel *p = VIPS_REGION_ADDR( reg, r->left, r->top );
 	VipsPel *q = VIPS_REGION_ADDR( dest, x, y );
-	int plsk = VIPS_REGION_LSKIP( reg );
-	int qlsk = VIPS_REGION_LSKIP( dest );
+	size_t plsk = VIPS_REGION_LSKIP( reg );
+	size_t qlsk = VIPS_REGION_LSKIP( dest );
+
+	int z;
 
 #ifdef DEBUG
 	/* Find the area we will write to in dest.
@@ -1111,12 +1085,23 @@ vips_region_copy( VipsRegion *reg, VipsRegion *dest, VipsRect *r, int x, int y )
 		VIPS_IMAGE_SIZEOF_PEL( dest->im ) );
 #endif /*DEBUG*/
 
-	for( z = 0; z < r->height; z++ ) {
-		memcpy( q, p, len );
+	/* Copy the scanlines. 
+	 *
+	 * Special case: if the two sets of scanlines are end-to-end (this
+	 * happens if we are copying complete regions) we can do a single
+	 * memcpy() for the whole thing. This is a little faster since we 
+	 * won't have to do unaligned copies.
+	 */
+	if( len == plsk &&
+		len == qlsk ) 
+		memcpy( q, p, len * r->height );
+	else
+		for( z = 0; z < r->height; z++ ) {
+			memcpy( q, p, len );
 
-		p += plsk;
-		q += qlsk;
-	}
+			p += plsk;
+			q += qlsk;
+		}
 }
 
 /* Generate area @target in @to using pixels in @from. 
@@ -1124,7 +1109,8 @@ vips_region_copy( VipsRegion *reg, VipsRegion *dest, VipsRect *r, int x, int y )
  * VIPS_CODING_LABQ only.
  */
 static void
-vips_region_shrink_labpack( VipsRegion *from, VipsRegion *to, VipsRect *target )
+vips_region_shrink_labpack( VipsRegion *from, 
+	VipsRegion *to, const VipsRect *target )
 {
 	int ls = VIPS_REGION_LSKIP( from );
 
@@ -1160,7 +1146,7 @@ vips_region_shrink_labpack( VipsRegion *from, VipsRegion *to, VipsRect *target )
 	}
 }
 
-#define SHRINK_TYPE_INT( TYPE ) \
+#define SHRINK_TYPE_MEAN_INT( TYPE ) \
 	for( x = 0; x < target->width; x++ ) { \
 		TYPE *tp = (TYPE *) p; \
 		TYPE *tp1 = (TYPE *) (p + ls); \
@@ -1179,7 +1165,7 @@ vips_region_shrink_labpack( VipsRegion *from, VipsRegion *to, VipsRect *target )
 		q += ps; \
 	}
 
-#define SHRINK_TYPE_FLOAT( TYPE )  \
+#define SHRINK_TYPE_MEAN_FLOAT( TYPE )  \
 	for( x = 0; x < target->width; x++ ) { \
 		TYPE *tp = (TYPE *) p; \
 		TYPE *tp1 = (TYPE *) (p + ls); \
@@ -1201,7 +1187,8 @@ vips_region_shrink_labpack( VipsRegion *from, VipsRegion *to, VipsRect *target )
 /* Generate area @target in @to using pixels in @from. Non-complex.
  */
 static void
-vips_region_shrink_uncoded( VipsRegion *from, VipsRegion *to, VipsRect *target )
+vips_region_shrink_uncoded_mean( VipsRegion *from,
+	VipsRegion *to, const VipsRect *target )
 {
 	int ls = VIPS_REGION_LSKIP( from );
 	int ps = VIPS_IMAGE_SIZEOF_PEL( from->im );
@@ -1218,26 +1205,231 @@ vips_region_shrink_uncoded( VipsRegion *from, VipsRegion *to, VipsRect *target )
 		/* Process this line of pels.
 		 */
 		switch( from->im->BandFmt ) {
-		case VIPS_FORMAT_UCHAR:	
-			SHRINK_TYPE_INT( unsigned char );  break; 
-		case VIPS_FORMAT_CHAR:	
-			SHRINK_TYPE_INT( signed char );  break; 
-		case VIPS_FORMAT_USHORT:	
-			SHRINK_TYPE_INT( unsigned short );  break; 
-		case VIPS_FORMAT_SHORT:	
-			SHRINK_TYPE_INT( signed short );  break; 
-		case VIPS_FORMAT_UINT:	
-			SHRINK_TYPE_INT( unsigned int );  break; 
-		case VIPS_FORMAT_INT:	
-			SHRINK_TYPE_INT( signed int );  break; 
-		case VIPS_FORMAT_FLOAT:	
-			SHRINK_TYPE_FLOAT( float );  break; 
-		case VIPS_FORMAT_DOUBLE:	
-			SHRINK_TYPE_FLOAT( double );  break; 
+		case VIPS_FORMAT_UCHAR:
+			SHRINK_TYPE_MEAN_INT( unsigned char );  break;
+		case VIPS_FORMAT_CHAR:
+			SHRINK_TYPE_MEAN_INT( signed char );  break;
+		case VIPS_FORMAT_USHORT:
+			SHRINK_TYPE_MEAN_INT( unsigned short );  break;
+		case VIPS_FORMAT_SHORT:
+			SHRINK_TYPE_MEAN_INT( signed short );  break;
+		case VIPS_FORMAT_UINT:
+			SHRINK_TYPE_MEAN_INT( unsigned int );  break;
+		case VIPS_FORMAT_INT:
+			SHRINK_TYPE_MEAN_INT( signed int );  break;
+		case VIPS_FORMAT_FLOAT:
+			SHRINK_TYPE_MEAN_FLOAT( float );  break;
+		case VIPS_FORMAT_DOUBLE:
+			SHRINK_TYPE_MEAN_FLOAT( double );  break;
 
 		default:
 			g_assert_not_reached();
 		}
+	}
+}
+
+/* This method is implemented so as to perform well and to always select an
+ * output pixel from one of the input pixels. As such we make only the
+ * following guarantees:
+ *
+ * ONLY works for non-complex uncoded images pixel types
+ * ALWAYS draws from the input values
+ * NEVER interpolates
+ * NOT stable with respect to the ordered set of input values
+ * IS stable with respect to the initial arrangement of input values
+ */
+#define SHRINK_TYPE_MEDIAN( TYPE ) { \
+	int ls = VIPS_REGION_LSKIP( from ); \
+	\
+	for( x = 0; x < target->width; x++ ) { \
+		TYPE *tp = (TYPE *) p; \
+		TYPE *tp1 = (TYPE *) (p + ls); \
+		TYPE *tq = (TYPE *) q; \
+		\
+		for( z = 0; z < nb; z++ ) { \
+        		tq[z] = VIPS_MIN( \
+					VIPS_MAX( tp[z], tp[z + nb] ), \
+					VIPS_MAX( tp1[z], tp1[z + nb] ) \
+				); \
+		} \
+		\
+		/* Move on two pels in input. \
+		 */ \
+		p += ps << 1; \
+		q += ps; \
+	} \
+}
+
+/* This method is implemented so as to perform well and to always select an
+ * output pixel from one of the input pixels. As such we make only the
+ * following guarantees:
+ *
+ * ONLY works for non-complex uncoded images pixel types
+ * ALWAYS draws from the input values
+ * NEVER interpolates
+ * NOT stable with respect to the ordered set of input values
+ * IS stable with respect to the initial arrangement of input values
+ */
+#define SHRINK_TYPE_MODE( TYPE ) { \
+	int ls = VIPS_REGION_LSKIP( from ); \
+	\
+	for( x = 0; x < target->width; x++ ) { \
+		TYPE *tp = (TYPE *) p; \
+		TYPE *tp1 = (TYPE *) (p + ls); \
+		TYPE *tq = (TYPE *) q; \
+		\
+		for( z = 0; z < nb; z++ ) { \
+			TYPE v[] = {tp[z], tp[z + nb], tp1[z], tp1[z + nb]}; \
+		    	int b0 = (v[0] == v[1]) | \
+				(v[0] == v[2]) | \
+				(v[0] == v[3]); \
+    			int b1 = (v[1] == v[0]) | \
+				(v[1] == v[2]) | \
+				(v[1] == v[3]); \
+    			int index = ((~b0) & 0x1) + (~(b0 ^ b1) & 0x1); \
+			\
+        		tq[z] = v[index]; \
+		} \
+		\
+		p += ps << 1; \
+		q += ps; \
+	} \
+}
+
+#define SHRINK_TYPE_MAX( TYPE ) { \
+	int ls = VIPS_REGION_LSKIP( from ); \
+	\
+	for( x = 0; x < target->width; x++ ) { \
+		TYPE *tp = (TYPE *) p; \
+		TYPE *tp1 = (TYPE *) (p + ls); \
+		TYPE *tq = (TYPE *) q; \
+		\
+		for( z = 0; z < nb; z++ ) { \
+        		tq[z] = VIPS_MAX( \
+					VIPS_MAX( tp[z], tp[z + nb] ), \
+					VIPS_MAX( tp1[z], tp1[z + nb] ) \
+				); \
+		} \
+		\
+		p += ps << 1; \
+		q += ps; \
+	} \
+}
+
+#define SHRINK_TYPE_MIN( TYPE ) { \
+	int ls = VIPS_REGION_LSKIP( from ); \
+	\
+	for( x = 0; x < target->width; x++ ) { \
+		TYPE *tp = (TYPE *) p; \
+		TYPE *tp1 = (TYPE *) (p + ls); \
+		TYPE *tq = (TYPE *) q; \
+		\
+		for( z = 0; z < nb; z++ ) { \
+        		tq[z] = VIPS_MIN( \
+					VIPS_MIN( tp[z], tp[z + nb] ), \
+					VIPS_MIN( tp1[z], tp1[z + nb] ) \
+				); \
+		} \
+		\
+		p += ps << 1; \
+		q += ps; \
+	} \
+}
+
+#define SHRINK_TYPE_NEAREST( TYPE ) { \
+	for( x = 0; x < target->width; x++ ) { \
+		TYPE *tp = (TYPE *) p; \
+		TYPE *tq = (TYPE *) q; \
+		\
+		for( z = 0; z < nb; z++ ) \
+        		tq[z] = tp[z]; \
+		\
+		p += ps << 1; \
+		q += ps; \
+	} \
+}
+
+#define VIPS_REGION_SHRINK( OP ) \
+static void \
+vips_region_shrink_uncoded_ ## OP( VipsRegion *from, \
+	VipsRegion *to, const VipsRect *target ) \
+{ \
+	int ps = VIPS_IMAGE_SIZEOF_PEL( from->im ); \
+	int nb = from->im->Bands; \
+ 	\
+	int x, y, z; \
+ 	\
+	for( y = 0; y < target->height; y++ ) { \
+		VipsPel *p = VIPS_REGION_ADDR( from, \
+			target->left * 2, (target->top + y) * 2 ); \
+		VipsPel *q = VIPS_REGION_ADDR( to, \
+			target->left, target->top + y ); \
+ 		\
+		/* Process this line of pels. \
+		 */ \
+		switch( from->im->BandFmt ) { \
+		case VIPS_FORMAT_UCHAR: \
+			SHRINK_TYPE_ ## OP( unsigned char );  break; \
+		case VIPS_FORMAT_CHAR: \
+			SHRINK_TYPE_ ## OP( signed char );  break; \
+		case VIPS_FORMAT_USHORT: \
+			SHRINK_TYPE_ ## OP( unsigned short );  break; \
+		case VIPS_FORMAT_SHORT: \
+			SHRINK_TYPE_ ## OP( signed short );  break; \
+		case VIPS_FORMAT_UINT: \
+			SHRINK_TYPE_ ## OP( unsigned int );  break; \
+		case VIPS_FORMAT_INT: \
+			SHRINK_TYPE_ ## OP( signed int );  break; \
+		case VIPS_FORMAT_FLOAT: \
+			SHRINK_TYPE_ ## OP( float );  break; \
+		case VIPS_FORMAT_DOUBLE: \
+			SHRINK_TYPE_ ## OP( double );  break; \
+ 		\
+		default: \
+			g_assert_not_reached(); \
+		} \
+	} \
+} 
+
+VIPS_REGION_SHRINK( MAX );
+VIPS_REGION_SHRINK( MIN );
+VIPS_REGION_SHRINK( MODE );
+VIPS_REGION_SHRINK( MEDIAN );
+VIPS_REGION_SHRINK( NEAREST );
+
+/* Generate area @target in @to using pixels in @from. Non-complex.
+ */
+static void
+vips_region_shrink_uncoded( VipsRegion *from,
+	VipsRegion *to, const VipsRect *target, VipsRegionShrink method )
+{
+	switch( method ) {
+		case VIPS_REGION_SHRINK_MEAN:
+			vips_region_shrink_uncoded_mean( from, to, target );
+			break;
+
+		case VIPS_REGION_SHRINK_MEDIAN:
+			vips_region_shrink_uncoded_MEDIAN( from, to, target );
+			break;
+
+		case VIPS_REGION_SHRINK_MODE:
+			vips_region_shrink_uncoded_MODE( from, to, target );
+			break;
+
+		case VIPS_REGION_SHRINK_MAX:
+			vips_region_shrink_uncoded_MAX( from, to, target );
+			break;
+
+		case VIPS_REGION_SHRINK_MIN:
+			vips_region_shrink_uncoded_MIN( from, to, target );
+			break;
+
+		case VIPS_REGION_SHRINK_NEAREST:
+			vips_region_shrink_uncoded_NEAREST( from, to, target );
+			break;
+
+		default:
+			g_assert_not_reached();
 	}
 }
 
@@ -1284,7 +1476,8 @@ vips_region_shrink_uncoded( VipsRegion *from, VipsRegion *to, VipsRect *target )
  * last band as alpha.
  */
 static void
-vips_region_shrink_alpha( VipsRegion *from, VipsRegion *to, VipsRect *target )
+vips_region_shrink_alpha( VipsRegion *from, 
+	VipsRegion *to, const VipsRect *target )
 {
 	int ls = VIPS_REGION_LSKIP( from );
 	int nb = from->im->Bands;
@@ -1324,33 +1517,38 @@ vips_region_shrink_alpha( VipsRegion *from, VipsRegion *to, VipsRect *target )
 }
 
 /**
- * vips_region_shrink:
- * @from: source region 
- * @to: destination region 
+ * vips_region_shrink_method:
+ * @from: source region
+ * @to: (inout): destination region
  * @target: #VipsRect of pixels you need to copy
+ * @method: method to use when generating target pixels
  *
  * Write the pixels @target in @to from the x2 larger area in @from.
  * Non-complex uncoded images and LABQ only. Images with alpha (see
  * vips_image_hasalpha()) shrink with pixels scaled by alpha to avoid fringing.
  *
+ * @method selects the method used to do the 2x2 shrink. 
+ *
  * See also: vips_region_copy().
  */
 int
-vips_region_shrink( VipsRegion *from, VipsRegion *to, VipsRect *target )
+vips_region_shrink_method( VipsRegion *from, VipsRegion *to, 
+	const VipsRect *target, VipsRegionShrink method )
 {
 	VipsImage *image = from->im;
 
-	if( vips_check_coding_noneorlabq( "vips_region_shrink", image ) )
+	if( vips_check_coding_noneorlabq( "vips_region_shrink_method", image ) )
 		return( -1 );
 
 	if( from->im->Coding == VIPS_CODING_NONE ) {
-		if( vips_check_noncomplex(  "vips_region_shrink", image ) )
+		if( vips_check_noncomplex( "vips_region_shrink_method", 
+			image ) )
 			return( -1 );
 
-		if( vips_image_hasalpha( image ) ) 
+		if( vips_image_hasalpha( image ) )
 			vips_region_shrink_alpha( from, to, target );
 		else
-			vips_region_shrink_uncoded( from, to, target );
+			vips_region_shrink_uncoded( from, to, target, method );
 	}
 	else
 		vips_region_shrink_labpack( from, to, target );
@@ -1358,10 +1556,31 @@ vips_region_shrink( VipsRegion *from, VipsRegion *to, VipsRect *target )
 	return( 0 );
 }
 
+/**
+ * vips_region_shrink: (skip)
+ * @from: source region
+ * @to: (inout): destination region
+ * @target: #VipsRect of pixels you need to copy
+ *
+ * Write the pixels @target in @to from the x2 larger area in @from.
+ * Non-complex uncoded images and LABQ only. Images with alpha (see
+ * vips_image_hasalpha()) shrink with pixels scaled by alpha to avoid fringing.
+ *
+ * This is a compatibility stub that just calls vips_region_shrink_method().
+ *
+ * See also: vips_region_shrink_method().
+ */
+int
+vips_region_shrink( VipsRegion *from, VipsRegion *to, const VipsRect *target )
+{
+	return( vips_region_shrink_method( from, to, target, 
+		VIPS_REGION_SHRINK_MEAN ) ); 
+}
+
 /* Generate into a region. 
  */
 static int
-vips_region_generate( VipsRegion *reg )
+vips_region_generate( VipsRegion *reg, void *a )
 {
 	VipsImage *im = reg->im;
 
@@ -1387,7 +1606,7 @@ vips_region_generate( VipsRegion *reg )
 }
 
 /** 
- * vips_region_prepare:
+ * vips_region_prepare: (method)
  * @reg: region to prepare
  * @r: #VipsRect of pixels you need to be able to address
  *
@@ -1408,7 +1627,7 @@ vips_region_generate( VipsRegion *reg )
  * Returns: 0 on success, or -1 on error.
  */
 int
-vips_region_prepare( VipsRegion *reg, VipsRect *r )
+vips_region_prepare( VipsRegion *reg, const VipsRect *r )
 {	
 	VipsImage *im = reg->im;
 
@@ -1444,8 +1663,7 @@ vips_region_prepare( VipsRegion *reg, VipsRect *r )
 
 	switch( im->dtype ) {
 	case VIPS_IMAGE_PARTIAL:
-		if( vips_region_fill( reg, r, 
-			(VipsRegionFillFn) vips_region_generate, NULL ) )
+		if( vips_region_fill( reg, r, vips_region_generate, NULL ) )
 			return( -1 );
 
 		break;
@@ -1481,7 +1699,7 @@ vips_region_prepare( VipsRegion *reg, VipsRect *r )
  */
 static int
 vips_region_prepare_to_generate( VipsRegion *reg, 
-	VipsRegion *dest, VipsRect *r, int x, int y )
+	VipsRegion *dest, const VipsRect *r, int x, int y )
 {
 	VipsImage *im = reg->im;
 	VipsPel *p;
@@ -1501,7 +1719,7 @@ vips_region_prepare_to_generate( VipsRegion *reg,
 
 	/* Run sequence into reg.
 	 */
-	if( vips_region_generate( reg ) )
+	if( vips_region_generate( reg, NULL ) )
 		return( -1 );
 
 	/* The generate function may not have actually made any pixels ... it
@@ -1515,21 +1733,20 @@ vips_region_prepare_to_generate( VipsRegion *reg,
 }
 
 /** 
- * vips_region_prepare_to:
+ * vips_region_prepare_to: (method)
  * @reg: region to prepare
- * @dest: region to write to
+ * @dest: (inout): region to write to
  * @r: #VipsRect of pixels you need to be able to address
  * @x: postion of @r in @dest
  * @y: postion of @r in @dest
  *
  * Like vips_region_prepare(): fill @reg with the pixels in area @r. 
- * Unlike vips_region_prepare(), rather than writing the result to @reg, the pixels are
- * written into @dest
- * at offset @x, @y. 
+ *
+ * Unlike vips_region_prepare(), rather than writing the result to @reg, the 
+ * pixels are written into @dest at offset @x, @y. 
  *
  * Also unlike vips_region_prepare(), @dest is not set up for writing for 
- * you with
- * vips_region_buffer(). You can
+ * you with vips_region_buffer(). You can
  * point @dest at anything, and pixels really will be written there. 
  * This makes vips_region_prepare_to() useful for making the ends of 
  * pipelines.
@@ -1540,7 +1757,7 @@ vips_region_prepare_to_generate( VipsRegion *reg,
  */
 int
 vips_region_prepare_to( VipsRegion *reg, 
-	VipsRegion *dest, VipsRect *r, int x, int y )
+	VipsRegion *dest, const VipsRect *r, int x, int y )
 {
 	VipsImage *im = reg->im;
 	VipsRect image;
@@ -1675,7 +1892,7 @@ vips_region_prepare_to( VipsRegion *reg,
 /* Don't use this, use vips_reorder_prepare_many() instead.
  */
 int
-vips_region_prepare_many( VipsRegion **reg, VipsRect *r )
+vips_region_prepare_many( VipsRegion **reg, const VipsRect *r )
 {
 	for( ; *reg; ++reg )
 		if( vips_region_prepare( *reg, r ) )
@@ -1685,7 +1902,95 @@ vips_region_prepare_many( VipsRegion **reg, VipsRect *r )
 }
 
 /** 
- * vips_region_invalidate: 
+ * vips_region_fetch: (method)
+ * @reg: region to fetch pixels from
+ * @left: area of pixels to fetch
+ * @top: area of pixels to fetch
+ * @width: area of pixels to fetch
+ * @height: area of pixels to fetch
+ *
+ * Generate an area of pixels and return a copy. The result must be freed
+ * with g_free(). The requested area must be completely inside the image.
+ *
+ * This is equivalent to vips_region_prepare(), followed by a memcpy. It is
+ * convenient for language bindings.
+ *
+ * Returns: A copy of the pixel data.
+ */
+VipsPel *
+vips_region_fetch( VipsRegion *region, 
+	int left, int top, int width, int height, size_t *len )
+{
+	VipsRect request;
+	VipsRect image;
+	int y;
+	VipsPel *result;
+	VipsPel *p, *q;
+	size_t skip;
+	size_t line;
+
+	g_assert( width > 0 );
+	g_assert( height > 0 );
+
+	image.left = 0;
+	image.top = 0;
+	image.width = region->im->Xsize;
+	image.height = region->im->Ysize;
+	request.left = left;
+	request.top = top;
+	request.width = width;
+	request.height = height;
+	if( !vips_rect_includesrect( &image, &request ) )
+		return( NULL );
+	if( vips_region_prepare( region, &request ) )
+		return( NULL );
+
+	skip = VIPS_REGION_LSKIP( region );
+	line = VIPS_IMAGE_SIZEOF_PEL( region->im ) * request.width;
+	if( !(result = (VipsPel *) vips_malloc( NULL, line * request.height )) )
+		return( NULL );
+
+	p = VIPS_REGION_ADDR( region, request.left, request.top );
+	q = result;
+	for( y = 0; y < request.height; y++ )  {
+		memcpy( q, p, line ); 
+
+		p += skip;
+		q += line;
+	}
+
+	if( len )
+		*len = request.height * line;
+
+	return( result );
+}
+
+/**
+ * vips_region_width: (method)
+ * @region: fetch width from this
+ *
+ * Returns: Width of the pixels held in region.
+ */
+int
+vips_region_width( VipsRegion *region )
+{
+	return( region->valid.width );
+}	
+
+/**
+ * vips_region_height: (method)
+ * @region: fetch height from this
+ *
+ * Returns: Height of the pixels held in region.
+ */
+int
+vips_region_height( VipsRegion *region )
+{
+	return( region->valid.height );
+}	
+
+/** 
+ * vips_region_invalidate: (method)
  * @reg: region to invalidate
  *
  * Mark a region as containing invalid pixels. Calling this function means
@@ -1705,7 +2010,7 @@ vips_region_invalidate( VipsRegion *reg )
 
 #ifdef VIPS_DEBUG
 static void *
-vips_region_dump_all_cb( VipsRegion *region, size_t *alive )
+vips_region_dump_all_cb( VipsRegion *region, size_t *alive, void *b )
 {
 	char str[2048];
 	VipsBuf buf = VIPS_BUF_STATIC( str );

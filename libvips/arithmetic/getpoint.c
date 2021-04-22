@@ -113,7 +113,7 @@ vips_getpoint_build( VipsObject *object )
 	g_object_set( object, 
 		"out_array", out_array,
 		NULL );
-	vips_area_unref( (VipsArea *) out_array );
+	vips_area_unref( VIPS_AREA( out_array ) );
 
 	return( 0 );
 }
@@ -166,9 +166,9 @@ vips_getpoint_init( VipsGetpoint *getpoint )
 }
 
 /**
- * vips_getpoint:
+ * vips_getpoint: (method)
  * @in: image to read from
- * @vector: array length=n: output pixel value here
+ * @vector: (out)(array length=n): output pixel value here
  * @n: length of output vector
  * @x: position to read
  * @y: position to read
@@ -207,6 +207,7 @@ vips_getpoint( VipsImage *in, double **vector, int *n, int x, int y, ... )
 	}
 	memcpy( *vector, area->data, area->n * area->sizeof_type ); 
 	*n = area->n;
+        vips_area_unref( area );
 
 	return( 0 );
 }

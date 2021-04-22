@@ -246,7 +246,7 @@ vips_relationalv( VipsImage *left, VipsImage *right, VipsImage **out,
  * vips_relational:
  * @left: left-hand input #VipsImage
  * @right: right-hand input #VipsImage
- * @out: output #VipsImage
+ * @out: (out): output #VipsImage
  * @relational: relational operation to perform
  * @...: %NULL-terminated list of optional named arguments
  *
@@ -294,7 +294,7 @@ vips_relational( VipsImage *left, VipsImage *right, VipsImage **out,
  * vips_equal:
  * @left: left-hand input #VipsImage
  * @right: right-hand input #VipsImage
- * @out: output #VipsImage
+ * @out: (out): output #VipsImage
  * @...: %NULL-terminated list of optional named arguments
  *
  * Perform #VIPS_OPERATION_RELATIONAL_EQUAL on a pair of images. See
@@ -320,7 +320,7 @@ vips_equal( VipsImage *left, VipsImage *right, VipsImage **out, ... )
  * vips_notequal:
  * @left: left-hand input #VipsImage
  * @right: right-hand input #VipsImage
- * @out: output #VipsImage
+ * @out: (out): output #VipsImage
  * @...: %NULL-terminated list of optional named arguments
  *
  * Perform #VIPS_OPERATION_RELATIONAL_NOTEQ on a pair of images. See
@@ -346,7 +346,7 @@ vips_notequal( VipsImage *left, VipsImage *right, VipsImage **out, ... )
  * vips_more:
  * @left: left-hand input #VipsImage
  * @right: right-hand input #VipsImage
- * @out: output #VipsImage
+ * @out: (out): output #VipsImage
  * @...: %NULL-terminated list of optional named arguments
  *
  * Perform #VIPS_OPERATION_RELATIONAL_MORE on a pair of images. See
@@ -372,7 +372,7 @@ vips_more( VipsImage *left, VipsImage *right, VipsImage **out, ... )
  * vips_moreeq:
  * @left: left-hand input #VipsImage
  * @right: right-hand input #VipsImage
- * @out: output #VipsImage
+ * @out: (out): output #VipsImage
  * @...: %NULL-terminated list of optional named arguments
  *
  * Perform #VIPS_OPERATION_RELATIONAL_MOREEQ on a pair of images. See
@@ -398,7 +398,7 @@ vips_moreeq( VipsImage *left, VipsImage *right, VipsImage **out, ... )
  * vips_less:
  * @left: left-hand input #VipsImage
  * @right: right-hand input #VipsImage
- * @out: output #VipsImage
+ * @out: (out): output #VipsImage
  * @...: %NULL-terminated list of optional named arguments
  *
  * Perform #VIPS_OPERATION_RELATIONAL_LESS on a pair of images. See
@@ -424,7 +424,7 @@ vips_less( VipsImage *left, VipsImage *right, VipsImage **out, ... )
  * vips_lesseq:
  * @left: left-hand input #VipsImage
  * @right: right-hand input #VipsImage
- * @out: output #VipsImage
+ * @out: (out): output #VipsImage
  * @...: %NULL-terminated list of optional named arguments
  *
  * Perform #VIPS_OPERATION_RELATIONAL_LESSEQ on a pair of images. See
@@ -457,25 +457,18 @@ typedef VipsUnaryConstClass VipsRelationalConstClass;
 G_DEFINE_TYPE( VipsRelationalConst, 
 	vips_relational_const, VIPS_TYPE_UNARY_CONST );
 
-static int
-vips_relational_const_build( VipsObject *object )
-{
-	VipsUnary *unary = (VipsUnary *) object;
-	VipsUnaryConst *uconst = (VipsUnaryConst *) object;
-
-	if( unary->in )
-		uconst->const_format = unary->in->BandFmt;
-
-	if( VIPS_OBJECT_CLASS( vips_relational_const_parent_class )->
-		build( object ) )
-		return( -1 );
-
-	return( 0 );
+#define RLOOPCI( TYPE, OP ) { \
+	TYPE * restrict p = (TYPE *) in[0]; \
+	int * restrict c = uconst->c_int; \
+ 	\
+	for( i = 0, x = 0; x < width; x++ ) \
+		for( b = 0; b < bands; b++, i++ ) \
+			out[i] = (p[i] OP c[b]) ? 255 : 0; \
 }
 
-#define RLOOPC( TYPE, OP ) { \
+#define RLOOPCF( TYPE, OP ) { \
 	TYPE * restrict p = (TYPE *) in[0]; \
-	TYPE * restrict c = (TYPE *) uconst->c_ready; \
+	double * restrict c = uconst->c_double; \
  	\
 	for( i = 0, x = 0; x < width; x++ ) \
 		for( b = 0; b < bands; b++, i++ ) \
@@ -486,7 +479,7 @@ vips_relational_const_build( VipsObject *object )
 	TYPE * restrict p = (TYPE *) in[0]; \
  	\
 	for( i = 0, x = 0; x < width; x++ ) { \
-		TYPE * restrict c = (TYPE *) uconst->c_ready; \
+		double * restrict c = uconst->c_double; \
 		\
 		for( b = 0; b < bands; b++, i++ ) { \
 			out[i] = OP( p[0], p[1], c[0], c[1]) ? 255 : 0; \
@@ -505,32 +498,64 @@ vips_relational_const_buffer( VipsArithmetic *arithmetic,
 	VipsRelationalConst *rconst = (VipsRelationalConst *) arithmetic;
 	VipsImage *im = arithmetic->ready[0];
 	int bands = im->Bands;
+	gboolean is_int = uconst->is_int &&
+		vips_band_format_isint( im->BandFmt );
 
 	int i, x, b;
 
 	switch( rconst->relational ) {
-	case VIPS_OPERATION_RELATIONAL_EQUAL: 	
-		SWITCH( RLOOPC, CLOOPC, ==, CEQUAL ); 
+	case VIPS_OPERATION_RELATIONAL_EQUAL:
+		if( is_int ) {
+			SWITCH( RLOOPCI, CLOOPC, ==, CEQUAL ); 
+		}
+		else {
+			SWITCH( RLOOPCF, CLOOPC, ==, CEQUAL ); 
+		}
 		break;
 
 	case VIPS_OPERATION_RELATIONAL_NOTEQ:
-		SWITCH( RLOOPC, CLOOPC, !=, CNOTEQ ); 
+		if( is_int ) {
+			SWITCH( RLOOPCI, CLOOPC, !=, CNOTEQ ); 
+		}
+		else {
+			SWITCH( RLOOPCF, CLOOPC, !=, CNOTEQ ); 
+		}
 		break;
 
-	case VIPS_OPERATION_RELATIONAL_LESS: 	
-		SWITCH( RLOOPC, CLOOPC, <, CLESS ); 
+	case VIPS_OPERATION_RELATIONAL_LESS:
+		if( is_int ) {
+			SWITCH( RLOOPCI, CLOOPC, <, CLESS ); 
+		}
+		else {
+			SWITCH( RLOOPCF, CLOOPC, <, CLESS ); 
+		}
 		break;
 
-	case VIPS_OPERATION_RELATIONAL_LESSEQ: 	
-		SWITCH( RLOOPC, CLOOPC, <=, CLESSEQ ); 
+	case VIPS_OPERATION_RELATIONAL_LESSEQ:
+		if( is_int ) {
+			SWITCH( RLOOPCI, CLOOPC, <=, CLESSEQ ); 
+		}
+		else {
+			SWITCH( RLOOPCF, CLOOPC, <=, CLESSEQ ); 
+		}
 		break;
 
-	case VIPS_OPERATION_RELATIONAL_MORE: 	
-		SWITCH( RLOOPC, CLOOPC, >, CMORE ); 
+	case VIPS_OPERATION_RELATIONAL_MORE:
+		if( is_int ) {
+			SWITCH( RLOOPCI, CLOOPC, >, CMORE ); 
+		}
+		else {
+			SWITCH( RLOOPCF, CLOOPC, >, CMORE ); 
+		}
 		break;
 
-	case VIPS_OPERATION_RELATIONAL_MOREEQ: 	
-		SWITCH( RLOOPC, CLOOPC, >=, CMOREEQ ); 
+	case VIPS_OPERATION_RELATIONAL_MOREEQ:
+		if( is_int ) {
+			SWITCH( RLOOPCI, CLOOPC, >=, CMOREEQ ); 
+		}
+		else {
+			SWITCH( RLOOPCF, CLOOPC, >=, CMOREEQ ); 
+		}
 		break;
 
 	default:
@@ -551,7 +576,6 @@ vips_relational_const_class_init( VipsRelationalConstClass *class )
 	object_class->nickname = "relational_const";
 	object_class->description = 
 		_( "relational operations against a constant" );
-	object_class->build = vips_relational_const_build;
 
 	aclass->process_line = vips_relational_const_buffer;
 
@@ -574,7 +598,7 @@ vips_relational_const_init( VipsRelationalConst *relational_const )
 
 static int
 vips_relational_constv( VipsImage *in, VipsImage **out, 
-	VipsOperationRelational relational, double *c, int n, va_list ap )
+	VipsOperationRelational relational, const double *c, int n, va_list ap )
 {
 	VipsArea *area_c;
 	double *array; 
@@ -595,11 +619,11 @@ vips_relational_constv( VipsImage *in, VipsImage **out,
 }
 
 /**
- * vips_relational_const:
+ * vips_relational_const: (method)
  * @in: input image
- * @out: output image
+ * @out: (out): output image
  * @relational: relational operation to perform
- * @c: array of constants 
+ * @c: (array length=n): array of constants
  * @n: number of constants in @c
  * @...: %NULL-terminated list of optional named arguments
  *
@@ -621,7 +645,7 @@ vips_relational_constv( VipsImage *in, VipsImage **out,
  */
 int
 vips_relational_const( VipsImage *in, VipsImage **out, 
-	VipsOperationRelational relational, double *c, int n, ... )
+	VipsOperationRelational relational, const double *c, int n, ... )
 {
 	va_list ap;
 	int result;
@@ -634,10 +658,10 @@ vips_relational_const( VipsImage *in, VipsImage **out,
 }
 
 /**
- * vips_equal_const:
+ * vips_equal_const: (method)
  * @in: input #VipsImage
- * @out: output #VipsImage
- * @c: array of constants 
+ * @out: (out): output #VipsImage
+ * @c: (array length=n): array of constants
  * @n: number of constants in @c
  * @...: %NULL-terminated list of optional named arguments
  *
@@ -647,7 +671,7 @@ vips_relational_const( VipsImage *in, VipsImage **out,
  * Returns: 0 on success, -1 on error
  */
 int
-vips_equal_const( VipsImage *in, VipsImage **out, double *c, int n, ... )
+vips_equal_const( VipsImage *in, VipsImage **out, const double *c, int n, ... )
 {
 	va_list ap;
 	int result;
@@ -661,10 +685,10 @@ vips_equal_const( VipsImage *in, VipsImage **out, double *c, int n, ... )
 }
 
 /**
- * vips_notequal_const:
+ * vips_notequal_const: (method)
  * @in: input #VipsImage
- * @out: output #VipsImage
- * @c: array of constants 
+ * @out: (out): output #VipsImage
+ * @c: (array length=n): array of constants
  * @n: number of constants in @c
  * @...: %NULL-terminated list of optional named arguments
  *
@@ -674,7 +698,8 @@ vips_equal_const( VipsImage *in, VipsImage **out, double *c, int n, ... )
  * Returns: 0 on success, -1 on error
  */
 int
-vips_notequal_const( VipsImage *in, VipsImage **out, double *c, int n, ... )
+vips_notequal_const( VipsImage *in, VipsImage **out, 
+	const double *c, int n, ... )
 {
 	va_list ap;
 	int result;
@@ -688,10 +713,10 @@ vips_notequal_const( VipsImage *in, VipsImage **out, double *c, int n, ... )
 }
 
 /**
- * vips_less_const:
+ * vips_less_const: (method)
  * @in: input #VipsImage
- * @out: output #VipsImage
- * @c: array of constants 
+ * @out: (out): output #VipsImage
+ * @c: (array length=n): array of constants
  * @n: number of constants in @c
  * @...: %NULL-terminated list of optional named arguments
  *
@@ -701,7 +726,7 @@ vips_notequal_const( VipsImage *in, VipsImage **out, double *c, int n, ... )
  * Returns: 0 on success, -1 on error
  */
 int
-vips_less_const( VipsImage *in, VipsImage **out, double *c, int n, ... )
+vips_less_const( VipsImage *in, VipsImage **out, const double *c, int n, ... )
 {
 	va_list ap;
 	int result;
@@ -715,10 +740,10 @@ vips_less_const( VipsImage *in, VipsImage **out, double *c, int n, ... )
 }
 
 /**
- * vips_lesseq_const:
+ * vips_lesseq_const: (method)
  * @in: input #VipsImage
- * @out: output #VipsImage
- * @c: array of constants 
+ * @out: (out): output #VipsImage
+ * @c: (array length=n): array of constants
  * @n: number of constants in @c
  * @...: %NULL-terminated list of optional named arguments
  *
@@ -728,7 +753,7 @@ vips_less_const( VipsImage *in, VipsImage **out, double *c, int n, ... )
  * Returns: 0 on success, -1 on error
  */
 int
-vips_lesseq_const( VipsImage *in, VipsImage **out, double *c, int n, ... )
+vips_lesseq_const( VipsImage *in, VipsImage **out, const double *c, int n, ... )
 {
 	va_list ap;
 	int result;
@@ -742,10 +767,10 @@ vips_lesseq_const( VipsImage *in, VipsImage **out, double *c, int n, ... )
 }
 
 /**
- * vips_more_const:
+ * vips_more_const: (method)
  * @in: input #VipsImage
- * @out: output #VipsImage
- * @c: array of constants 
+ * @out: (out): output #VipsImage
+ * @c: (array length=n): array of constants
  * @n: number of constants in @c
  * @...: %NULL-terminated list of optional named arguments
  *
@@ -755,7 +780,7 @@ vips_lesseq_const( VipsImage *in, VipsImage **out, double *c, int n, ... )
  * Returns: 0 on success, -1 on error
  */
 int
-vips_more_const( VipsImage *in, VipsImage **out, double *c, int n, ... )
+vips_more_const( VipsImage *in, VipsImage **out, const double *c, int n, ... )
 {
 	va_list ap;
 	int result;
@@ -769,10 +794,10 @@ vips_more_const( VipsImage *in, VipsImage **out, double *c, int n, ... )
 }
 
 /**
- * vips_moreeq_const:
+ * vips_moreeq_const: (method)
  * @in: input #VipsImage
- * @out: output #VipsImage
- * @c: array of constants 
+ * @out: (out): output #VipsImage
+ * @c: (array length=n): array of constants
  * @n: number of constants in @c
  * @...: %NULL-terminated list of optional named arguments
  *
@@ -782,7 +807,7 @@ vips_more_const( VipsImage *in, VipsImage **out, double *c, int n, ... )
  * Returns: 0 on success, -1 on error
  */
 int
-vips_moreeq_const( VipsImage *in, VipsImage **out, double *c, int n, ... )
+vips_moreeq_const( VipsImage *in, VipsImage **out, const double *c, int n, ... )
 {
 	va_list ap;
 	int result;
@@ -796,9 +821,9 @@ vips_moreeq_const( VipsImage *in, VipsImage **out, double *c, int n, ... )
 }
 
 /**
- * vips_relational_const1:
+ * vips_relational_const1: (method)
  * @in: input image
- * @out: output image
+ * @out: (out): output image
  * @relational: relational operation to perform
  * @c: constant 
  * @...: %NULL-terminated list of optional named arguments
@@ -825,9 +850,9 @@ vips_relational_const1( VipsImage *in, VipsImage **out,
 }
 
 /**
- * vips_equal_const1:
+ * vips_equal_const1: (method)
  * @in: input image
- * @out: output image
+ * @out: (out): output image
  * @c: constant 
  * @...: %NULL-terminated list of optional named arguments
  *
@@ -851,9 +876,9 @@ vips_equal_const1( VipsImage *in, VipsImage **out, double c, ... )
 }
 
 /**
- * vips_notequal_const1:
+ * vips_notequal_const1: (method)
  * @in: input image
- * @out: output image
+ * @out: (out): output image
  * @c: constant 
  * @...: %NULL-terminated list of optional named arguments
  *
@@ -877,9 +902,9 @@ vips_notequal_const1( VipsImage *in, VipsImage **out, double c, ... )
 }
 
 /**
- * vips_less_const1:
+ * vips_less_const1: (method)
  * @in: input image
- * @out: output image
+ * @out: (out): output image
  * @c: constant 
  * @...: %NULL-terminated list of optional named arguments
  *
@@ -903,9 +928,9 @@ vips_less_const1( VipsImage *in, VipsImage **out, double c, ... )
 }
 
 /**
- * vips_lesseq_const1:
+ * vips_lesseq_const1: (method)
  * @in: input image
- * @out: output image
+ * @out: (out): output image
  * @c: constant 
  * @...: %NULL-terminated list of optional named arguments
  *
@@ -929,9 +954,9 @@ vips_lesseq_const1( VipsImage *in, VipsImage **out, double c, ... )
 }
 
 /**
- * vips_more_const1:
+ * vips_more_const1: (method)
  * @in: input image
- * @out: output image
+ * @out: (out): output image
  * @c: constant 
  * @...: %NULL-terminated list of optional named arguments
  *
@@ -955,9 +980,9 @@ vips_more_const1( VipsImage *in, VipsImage **out, double c, ... )
 }
 
 /**
- * vips_moreeq_const1:
+ * vips_moreeq_const1: (method)
  * @in: input image
- * @out: output image
+ * @out: (out): output image
  * @c: constant 
  * @...: %NULL-terminated list of optional named arguments
  *

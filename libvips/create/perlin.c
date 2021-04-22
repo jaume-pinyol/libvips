@@ -244,12 +244,10 @@ vips_perlin_build( VipsObject *object )
 		VIPS_ROUND_UP( perlin->height, perlin->cell_size ) / 
 		perlin->cell_size;
 
-	perlin->seed = g_random_double() * 0xffffffffu;
-
 	vips_image_init_fields( create->out,
 		perlin->width, perlin->height, 1,
 		perlin->uchar ? VIPS_FORMAT_UCHAR : VIPS_FORMAT_FLOAT, 
-		VIPS_CODING_NONE, VIPS_INTERPRETATION_B_W,
+		VIPS_CODING_NONE, VIPS_INTERPRETATION_MULTIBAND,
 		1.0, 1.0 );
 	vips_image_pipelinev( create->out,
 		VIPS_DEMAND_STYLE_ANY, NULL );
@@ -267,7 +265,7 @@ vips_perlin_make_tables( void *client )
 	int i;
 
 	for( i = 0; i < 256; i++ ) {
-		double angle = 2 * M_PI * i / 256.0;
+		double angle = 2 * VIPS_PI * i / 256.0;
 
 		vips_perlin_cos[i] = cos( angle );
 		vips_perlin_sin[i] = sin( angle );
@@ -284,7 +282,7 @@ vips_perlin_class_init( VipsPerlinClass *class )
 
 	static GOnce once = G_ONCE_INIT;
 
-	(void) g_once( &once, vips_perlin_make_tables, NULL );
+	VIPS_ONCE( &once, vips_perlin_make_tables, NULL );
 
 	gobject_class->set_property = vips_object_set_property;
 	gobject_class->get_property = vips_object_get_property;
@@ -321,17 +319,25 @@ vips_perlin_class_init( VipsPerlinClass *class )
 		G_STRUCT_OFFSET( VipsPerlin, uchar ),
 		FALSE );
 
+	VIPS_ARG_INT( class, "seed", 5, 
+		_( "Seed" ), 
+		_( "Random number seed" ),
+		VIPS_ARGUMENT_OPTIONAL_INPUT,
+		G_STRUCT_OFFSET( VipsPerlin, seed ),
+		INT_MIN, INT_MAX, 0 );
+
 }
 
 static void
 vips_perlin_init( VipsPerlin *perlin )
 {
 	perlin->cell_size = 256;
+	perlin->seed = UINT_MAX * g_random_double();
 }
 
 /**
  * vips_perlin:
- * @out: output image
+ * @out: (out): output image
  * @width: horizontal size
  * @height: vertical size
  * @...: %NULL-terminated list of optional named arguments

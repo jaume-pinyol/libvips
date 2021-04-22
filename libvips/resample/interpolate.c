@@ -16,6 +16,8 @@
  * 	- gtk-doc
  * 16/12/15
  * 	- faster bilinear
+ * 27/2/19 s-sajid-ali
+ * 	- more accurate bilinear
  */
 
 /*
@@ -61,7 +63,7 @@
 #include <vips/internal.h>
 
 /**
- * SECTION: interpolate
+ * SECTION: interpolator
  * @short_description: various interpolators: nearest, bilinear, and
  * some non-linear
  * @stability: Stable
@@ -429,8 +431,8 @@ G_DEFINE_TYPE( VipsInterpolateBilinear, vips_interpolate_bilinear,
  */
 
 #define BILINEAR_INT_INNER { \
-	tq[z] = (sc1 * tp1[z] + sc2 * tp2[z] + \
-		 sc3 * tp3[z] + sc4 * tp4[z] + \
+	tq[z] = (c1 * tp1[z] + c2 * tp2[z] + \
+		 c3 * tp3[z] + c4 * tp4[z] + \
 		 (1 << VIPS_INTERPOLATE_SHIFT) / 2) >> VIPS_INTERPOLATE_SHIFT; \
 	z += 1; \
 }
@@ -440,21 +442,16 @@ G_DEFINE_TYPE( VipsInterpolateBilinear, vips_interpolate_bilinear,
 #define BILINEAR_INT( TYPE ) { \
 	TYPE * restrict tq = (TYPE *) out; \
 	\
-	float Y = y - iy; \
-	float X = x - ix; \
-        \
-	float Yd = 1.0f - Y; \
-        \
-	float c4 = Y * X; \
-	float c2 = Yd * X; \
-	float c3 = Y - c4; \
-	float c1 = Yd - c2; \
+	int X = (x - ix) * VIPS_INTERPOLATE_SCALE; \
+	int Y = (y - iy) * VIPS_INTERPOLATE_SCALE; \
 	\
-	int sc1 = VIPS_INTERPOLATE_SCALE * c1;\
-	int sc2 = VIPS_INTERPOLATE_SCALE * c2;\
-	int sc3 = VIPS_INTERPOLATE_SCALE * c3;\
-	int sc4 = VIPS_INTERPOLATE_SCALE * c4;\
- 	\
+	int Yd = VIPS_INTERPOLATE_SCALE - Y; \
+        \
+	int c4 = (Y * X) >> VIPS_INTERPOLATE_SHIFT; \
+	int c2 = (Yd * X) >> VIPS_INTERPOLATE_SHIFT; \
+	int c3 = Y - c4; \
+	int c1 = Yd - c2; \
+	\
 	const TYPE * restrict tp1 = (TYPE *) p1; \
 	const TYPE * restrict tp2 = (TYPE *) p2; \
 	const TYPE * restrict tp3 = (TYPE *) p3; \
@@ -470,21 +467,22 @@ G_DEFINE_TYPE( VipsInterpolateBilinear, vips_interpolate_bilinear,
 	z += 1; \
 }
 
-/* Interpolate a pel ... int32 and float types, no tables, float 
- * arithmetic.
+/* Interpolate a pel ... int16, int32 and float types, no tables, float 
+ * arithmetic. Use double not float for coefficient calculation or we can
+ * get small over/undershoots.
  */
 #define BILINEAR_FLOAT( TYPE ) { \
 	TYPE * restrict tq = (TYPE *) out; \
 	\
-	float Y = y - iy; \
-	float X = x - ix; \
+	double X = x - ix; \
+	double Y = y - iy; \
         \
-	float Yd = 1.0f - Y; \
+	double Yd = 1.0f - Y; \
         \
-	float c4 = Y * X; \
-	float c2 = Yd * X; \
-	float c3 = Y - c4; \
-	float c1 = Yd - c2; \
+	double c4 = Y * X; \
+	double c2 = Yd * X; \
+	double c3 = Y - c4; \
+	double c1 = Yd - c2; \
  	\
 	const TYPE * restrict tp1 = (TYPE *) p1; \
 	const TYPE * restrict tp2 = (TYPE *) p2; \
@@ -495,21 +493,21 @@ G_DEFINE_TYPE( VipsInterpolateBilinear, vips_interpolate_bilinear,
 	VIPS_UNROLL( b, BILINEAR_FLOAT_INNER ); \
 }
 
-/* Expand for band types. with a fixed-point interpolator and a float
- * interpolator.
+/* The fixed-point path is fine for uchar pixels, but it'll be inaccurate for
+ * shorts and larger. 
  */
 #define SWITCH_INTERPOLATE( FMT, INT, FLOAT ) { \
 	switch( (FMT) ) { \
 	case VIPS_FORMAT_UCHAR:	INT( unsigned char ); break; \
-	case VIPS_FORMAT_CHAR: 	INT( char ); break;  \
-	case VIPS_FORMAT_USHORT:INT( unsigned short ); break;  \
-	case VIPS_FORMAT_SHORT: INT( short ); break;  \
-	case VIPS_FORMAT_UINT: 	FLOAT( unsigned int ); break;  \
-	case VIPS_FORMAT_INT: 	FLOAT( int );  break;  \
-	case VIPS_FORMAT_FLOAT: FLOAT( float ); break;  \
-	case VIPS_FORMAT_DOUBLE:FLOAT( double ); break;  \
-	case VIPS_FORMAT_COMPLEX: FLOAT( float ); break;  \
-	case VIPS_FORMAT_DPCOMPLEX:FLOAT( double ); break;  \
+	case VIPS_FORMAT_CHAR: 	INT( char ); break; \
+	case VIPS_FORMAT_USHORT:INT( unsigned short ); break; \
+	case VIPS_FORMAT_SHORT: INT( short ); break; \
+	case VIPS_FORMAT_UINT: 	FLOAT( unsigned int ); break; \
+	case VIPS_FORMAT_INT: 	FLOAT( int );  break; \
+	case VIPS_FORMAT_FLOAT: FLOAT( float ); break; \
+	case VIPS_FORMAT_DOUBLE:FLOAT( double ); break; \
+	case VIPS_FORMAT_COMPLEX: FLOAT( float ); break; \
+	case VIPS_FORMAT_DPCOMPLEX:FLOAT( double ); break; \
 	default: \
 		g_assert( FALSE ); \
 	} \
@@ -541,8 +539,7 @@ vips_interpolate_bilinear_interpolate( VipsInterpolate *interpolate,
 	g_assert( (int) x + 1 < VIPS_RECT_RIGHT( &in->valid ) );
 	g_assert( (int) y + 1 < VIPS_RECT_BOTTOM( &in->valid ) );
 
-	SWITCH_INTERPOLATE( in->im->BandFmt,
-		BILINEAR_INT, BILINEAR_FLOAT );
+	SWITCH_INTERPOLATE( in->im->BandFmt, BILINEAR_INT, BILINEAR_FLOAT );
 }
 
 static void
@@ -617,7 +614,7 @@ vips__interpolate_init( void )
 }
 
 /**
- * vips_interpolate_new:
+ * vips_interpolate_new: (constructor)
  * @nickname: nickname for interpolator
  *
  * Look up an interpolator from a nickname and make one. You need to free the

@@ -36,6 +36,7 @@
 #include <stdio.h>
 
 #include <vips/vips.h>
+#include <vips/vips7compat.h>
 #include <vips/internal.h>
 
 /* To iterate over supported formats, we build a temp list of subclasses of 
@@ -175,7 +176,7 @@ im_isvips( const char *filename )
 {
 	unsigned char buf[4];
 
-	if( im__get_bytes( filename, buf, 4 ) ) {
+	if( im__get_bytes( filename, buf, 4 ) == 4 ) {
 		if( buf[0] == 0x08 && buf[1] == 0xf2 &&
 			buf[2] == 0xa6 && buf[3] == 0xb6 )
 			/* SPARC-order VIPS image.
@@ -211,7 +212,7 @@ vips_flags( const char *filename )
 
 	flags = VIPS_FORMAT_PARTIAL;
 
-	if( im__get_bytes( filename, buf, 4 ) &&
+	if( im__get_bytes( filename, buf, 4 ) == 4 &&
 		buf[0] == 0x08 && 
 		buf[1] == 0xf2 &&
 		buf[2] == 0xa6 && 
@@ -306,6 +307,8 @@ im__format_init( void )
 #endif /*HAVE_TIFF*/
 	extern GType vips_format_openslide_get_type( void );
 	vips_format_openslide_get_type();
+	extern GType vips_format_nifti_get_type( void );
+	vips_format_nifti_get_type();
 }
 
 /* Can this format open this file?

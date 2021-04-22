@@ -55,7 +55,7 @@
  * 	- optionally parse rationals as a/b
  * 	- update exif image dimensions
  * 21/11/12
- * 	- attach IPCT data (app13), thanks Gary
+ * 	- attach IPTC data (app13), thanks Gary
  * 2/10/13 Lovell Fuller
  * 	- add optimize_coding parameter
  * 	- add progressive mode
@@ -79,11 +79,23 @@
  * 26/5/16
  * 	- switch to new orientation tag
  * 9/7/16
- * 	- turn off chroma subsample for Q > 90
+ * 	- turn off chroma subsample for Q >= 90
  * 7/11/16
  * 	- move exif handling out to exif.c
  * 27/2/17
  * 	- use dbuf for memory output
+ * 19/12/17 Lovell
+ * 	- fix a leak with an error during buffer output
+ * 19/4/19
+ * 	- fix another leak with error during buffer output
+ * 19/7/19
+ * 	- ignore large XMP
+ * 14/10/19
+ * 	- revise for target IO
+ * 18/2/20 Elad-Laufer
+ * 	- add subsample_mode, deprecate no_subsample
+ * 13/9/20
+ * 	- only write JFIF resolution if we don't have EXIF
  */
 
 /*
@@ -194,8 +206,6 @@ typedef struct {
 	struct jpeg_compress_struct cinfo;
         ErrorManager eman;
 	JSAMPROW *row_pointer;
-	char *profile_bytes;
-	size_t profile_length;
 	VipsImage *inverted;
 } Write;
 
@@ -203,10 +213,9 @@ static void
 write_destroy( Write *write )
 {
 	jpeg_destroy_compress( &write->cinfo );
-	VIPS_FREEF( fclose, write->eman.fp );
 	VIPS_FREE( write->row_pointer );
-	VIPS_FREE( write->profile_bytes );
 	VIPS_UNREF( write->inverted );
+	VIPS_UNREF( write->in );
 
 	g_free( write );
 }
@@ -219,15 +228,22 @@ write_new( VipsImage *in )
 	if( !(write = g_new0( Write, 1 )) )
 		return( NULL );
 
-	write->in = in;
+	write->in = NULL;
 	write->row_pointer = NULL;
         write->cinfo.err = jpeg_std_error( &write->eman.pub );
+	write->cinfo.dest = NULL;
 	write->eman.pub.error_exit = vips__new_error_exit;
 	write->eman.pub.output_message = vips__new_output_message;
 	write->eman.fp = NULL;
-	write->profile_bytes = NULL;
-	write->profile_length = 0;
 	write->inverted = NULL;
+
+	/* Make a copy of the input image since we may modify it with
+	 * vips__exif_update() etc.
+	 */
+	if( vips_copy( in, &write->in, NULL ) ) {
+		write_destroy( write );
+		return( NULL );
+	}
 
         return( write );
 }
@@ -263,7 +279,55 @@ write_blob( Write *write, const char *field, int app )
 #endif /*DEBUG*/
 
 			jpeg_write_marker( &write->cinfo, app, 
-				data, data_length ); } }
+				data, data_length ); 
+		} 
+	}
+
+	return( 0 );
+}
+
+#define XML_URL "http://ns.adobe.com/xap/1.0/"
+
+static int
+write_xmp( Write *write )
+{
+	unsigned char *data;
+	size_t data_length;
+	char *p;
+
+	if( !vips_image_get_typeof( write->in, VIPS_META_XMP_NAME ) ) 
+		return( 0 );
+	if( vips_image_get_blob( write->in, VIPS_META_XMP_NAME, 
+		(void *) &data, &data_length ) )
+		return( -1 );
+
+	/* To write >64kb XMP it you need to parse the whole XMP object, 
+	 * pull out the most important fields, code just them into the main 
+	 * XMP block, then write any remaining XMP objects into a set of 
+	 * extended XMP markers. 
+	 *
+	 * http://wwwimages.adobe.com/content/dam/Adobe/en/devnet/xmp/pdfs/ \
+	 * 	XMPSpecificationPart3.pdf
+	 *
+	 * jpeg_write_marker() with some libjpeg versions will throw a fatal 
+	 * error with large chunks.
+	 */
+	if( data_length > 60000 ) {
+		g_warning( "%s", _( "VipsJpeg: large XMP not saved" ) );
+		return( 0 );
+	}
+
+	/* We need to add the magic XML URL to the start, then a null
+	 * character, then the data.
+	 */
+	p = g_malloc( data_length + strlen( XML_URL ) + 1 );
+	strcpy( p, XML_URL );
+	memcpy( p + strlen( XML_URL ) + 1, data, data_length );
+	
+	jpeg_write_marker( &write->cinfo, JPEG_APP0 + 1, 
+		(unsigned char *) p, data_length + strlen( XML_URL ) + 1 ); 
+
+	g_free( p );
 
 	return( 0 );
 }
@@ -271,8 +335,7 @@ write_blob( Write *write, const char *field, int app )
 static int
 write_exif( Write *write )
 {
-	if( vips__exif_update( write->in ) ||
-		write_blob( write, VIPS_META_EXIF_NAME, JPEG_APP0 + 1 ) )
+	if( write_blob( write, VIPS_META_EXIF_NAME, JPEG_APP0 + 1 ) )
 		return( -1 );
 
 	return( 0 );
@@ -351,21 +414,82 @@ write_profile_data (j_compress_ptr cinfo,
   }
 }
 
+#ifndef HAVE_EXIF
+/* Set the JFIF resolution from the vips xres/yres tags.
+ */
+static void
+vips_jfif_resolution_from_image( struct jpeg_compress_struct *cinfo, 
+	VipsImage *image )
+{
+	int xres, yres;
+	const char *p;
+	int unit;
+
+	/* Default to inches, more progs support it.
+	 */
+	unit = 1;
+	if( vips_image_get_typeof( image, VIPS_META_RESOLUTION_UNIT ) &&
+		!vips_image_get_string( image, 
+			VIPS_META_RESOLUTION_UNIT, &p ) ) {
+		if( vips_isprefix( "cm", p ) ) 
+			unit = 2;
+		else if( vips_isprefix( "none", p ) ) 
+			unit = 0;
+	}
+
+	switch( unit ) {
+	case 0:
+		xres = VIPS_RINT( image->Xres );
+		yres = VIPS_RINT( image->Yres );
+		break;
+
+	case 1:
+		xres = VIPS_RINT( image->Xres * 25.4 );
+		yres = VIPS_RINT( image->Yres * 25.4 );
+		break;
+
+	case 2:
+		xres = VIPS_RINT( image->Xres * 10.0 );
+		yres = VIPS_RINT( image->Yres * 10.0 );
+		break;
+
+	default:
+		g_assert_not_reached();
+		break;
+	}
+
+	VIPS_DEBUG_MSG( "vips_jfif_resolution_from_image: "
+		"setting xres = %d, yres = %d, unit = %d\n", xres, yres, unit );
+
+	cinfo->density_unit = unit;
+	cinfo->X_density = xres;
+	cinfo->Y_density = yres;
+}
+#endif /*HAVE_EXIF*/
+
 /* Write an ICC Profile from a file into the JPEG stream.
  */
 static int
 write_profile_file( Write *write, const char *profile )
 {
-	if( !(write->profile_bytes = 
-		vips__file_read_name( profile, vips__icc_dir(), 
-		&write->profile_length )) ) 
+	VipsBlob *blob;
+
+	if( vips_profile_load( profile, &blob, NULL ) )
 		return( -1 );
-	write_profile_data( &write->cinfo, 
-		(JOCTET *) write->profile_bytes, write->profile_length );
+
+	if( blob ) {
+		size_t length;
+		const void *data = vips_blob_get( blob, &length );
+
+		write_profile_data( &write->cinfo, (JOCTET *) data, length );
 
 #ifdef DEBUG
-	printf( "write_profile_file: attached profile \"%s\"\n", profile );
+		printf( "write_profile_file: "
+			"attached profile \"%s\"\n", profile );
 #endif /*DEBUG*/
+
+		vips_area_unref( (VipsArea *) blob );
+	}
 
 	return( 0 );
 }
@@ -373,18 +497,17 @@ write_profile_file( Write *write, const char *profile )
 static int
 write_profile_meta( Write *write )
 {
-	void *data;
-	size_t data_length;
+	const void *data;
+	size_t length;
 
-	if( vips_image_get_blob( write->in, VIPS_META_ICC_NAME, 
-		&data, &data_length ) )
+	if( vips_image_get_blob( write->in, 
+		VIPS_META_ICC_NAME, &data, &length ) )
 		return( -1 );
-
-	write_profile_data( &write->cinfo, data, data_length );
+	write_profile_data( &write->cinfo, data, length );
 
 #ifdef DEBUG
 	printf( "write_profile_meta: attached %zd byte profile from header\n",
-		data_length );
+		length );
 #endif /*DEBUG*/
 
 	return( 0 );
@@ -415,8 +538,9 @@ write_jpeg_block( VipsRegion *region, VipsRect *area, void *a )
 static int
 write_vips( Write *write, int qfac, const char *profile, 
 	gboolean optimize_coding, gboolean progressive, gboolean strip, 
-	gboolean no_subsample, gboolean trellis_quant,
-	gboolean overshoot_deringing, gboolean optimize_scans, int quant_table )
+	gboolean trellis_quant, gboolean overshoot_deringing,
+	gboolean optimize_scans, int quant_table,
+	VipsForeignSubsample subsample_mode )
 {
 	VipsImage *in;
 	J_COLOR_SPACE space;
@@ -563,49 +687,57 @@ write_vips( Write *write, int qfac, const char *profile,
 	if( progressive ) 
 		jpeg_simple_progression( &write->cinfo ); 
 
-	/* Turn off chroma subsampling. Follow IM and do it automatically for
-	 * high Q. 
-	 */
-	if( no_subsample ||
-		qfac > 90 ) { 
+	if( subsample_mode == VIPS_FOREIGN_SUBSAMPLE_OFF ||
+		(subsample_mode == VIPS_FOREIGN_SUBSAMPLE_AUTO &&
+			qfac >= 90) ) {
 		int i;
 
-		for( i = 0; i < in->Bands; i++ ) { 
+		for( i = 0; i < in->Bands; i++ ) {
 			write->cinfo.comp_info[i].h_samp_factor = 1;
 			write->cinfo.comp_info[i].v_samp_factor = 1;
 		}
 	}
 
-	/* Don't write the APP0 JFIF headers if we are stripping.
+	/* Only write the JFIF headers if we are not stripping and we have no
+	 * EXIF. Some readers get confused if you set both.
 	 */
-	if( strip ) 
-		write->cinfo.write_JFIF_header = FALSE;
+	write->cinfo.write_JFIF_header = FALSE;
+#ifndef HAVE_EXIF
+	if( !strip ) {
+		vips_jfif_resolution_from_image( &write->cinfo,  write->in );
+		write->cinfo.write_JFIF_header = TRUE;
+	}
+#endif /*HAVE_EXIF*/
 
-	/* Build compress tables.
+	/* Write app0 and build compress tables.
 	 */
 	jpeg_start_compress( &write->cinfo, TRUE );
 
-	/* Write any APP markers we need.
+	/* All the other APP chunks come next.
 	 */
-	if( !strip ) { 
-		if( write_exif( write ) ||
+	if( !strip ) {
+		/* We need to rebuild the exif data block from any exif tags
+		 * on the image.
+		 */
+		if( vips__exif_update( write->in ) ||  
+			write_exif( write ) ||
+			write_xmp( write ) ||
 			write_blob( write, 
-				VIPS_META_XMP_NAME, JPEG_APP0 + 1 ) ||
-			write_blob( write, 
-				VIPS_META_IPCT_NAME, JPEG_APP0 + 13 ) )
+				VIPS_META_IPTC_NAME, JPEG_APP0 + 13 ) )
 			return( -1 );
 
 		/* A profile supplied as an argument overrides an embedded 
-		 * profile. "none" means don't attach a profile.
+		 * profile. 
 		 */
-		if( profile && 
-			strcmp( profile, "none" ) != 0 &&
-			write_profile_file( write, profile ) )
-			return( -1 );
-		if( !profile && 
-			vips_image_get_typeof( in, VIPS_META_ICC_NAME ) && 
-			write_profile_meta( write ) )
-			return( -1 );
+		if( profile ) {
+			if( write_profile_file( write, profile ) )
+				return( -1 );
+		}
+		else {
+			if( vips_image_get_typeof( in, VIPS_META_ICC_NAME ) && 
+				write_profile_meta( write ) )
+				return( -1 );
+		}
 	}
 
 	/* Write data. Note that the write function grabs the longjmp()!
@@ -618,64 +750,15 @@ write_vips( Write *write, int qfac, const char *profile,
 	if( setjmp( write->eman.jmp ) ) 
 		return( -1 );
 
+	/* This should only be called on a successful write.
+	 */
 	jpeg_finish_compress( &write->cinfo );
 
 	return( 0 );
 }
 
-/* Write an image to a jpeg file.
- */
-int
-vips__jpeg_write_file( VipsImage *in, 
-	const char *filename, int Q, const char *profile, 
-	gboolean optimize_coding, gboolean progressive, gboolean strip, 
-	gboolean no_subsample, gboolean trellis_quant,
-	gboolean overshoot_deringing, gboolean optimize_scans, int quant_table )
-{
-	Write *write;
+#define TARGET_BUFFER_SIZE (4096)
 
-	if( !(write = write_new( in )) )
-		return( -1 );
-
-	if( setjmp( write->eman.jmp ) ) {
-		/* Here for longjmp() from new_error_exit().
-		 */
-		write_destroy( write );
-
-		return( -1 );
-	}
-
-	/* Can't do this in write_new(), has to be after we've made the
-	 * setjmp().
-	 */
-        jpeg_create_compress( &write->cinfo );
-
-	/* Make output.
-	 */
-        if( !(write->eman.fp = vips__file_open_write( filename, FALSE )) ) {
-		write_destroy( write );
-                return( -1 );
-        }
-        jpeg_stdio_dest( &write->cinfo, write->eman.fp );
-
-	/* Convert!
-	 */
-	if( write_vips( write, 
-		Q, profile, optimize_coding, progressive, strip, no_subsample,
-		trellis_quant, overshoot_deringing, optimize_scans, 
-		quant_table ) ) {
-		write_destroy( write );
-		return( -1 );
-	}
-	write_destroy( write );
-
-	return( 0 );
-}
-
-/* Just like the above, but we write to a memory buffer.
- *
- * A memory buffer for the compressed image.
- */
 typedef struct {
 	/* Public jpeg fields.
 	 */
@@ -686,119 +769,94 @@ typedef struct {
 
 	/* Build the output area here.
 	 */
-	VipsDbuf dbuf;
+	VipsTarget *target;
 
-	/* Write the generated area here.
+	/* Our output buffer.
 	 */
-	void **obuf;		/* Allocated buffer, and size */
-	size_t *olen;
-} OutputBuffer;
+	unsigned char buf[TARGET_BUFFER_SIZE];
+} Dest;
 
-/* Buffer full method ... allocate a new output block. This is only called 
- * when the output area is exactly full.
+/* Buffer full method. This is only called when the output area is exactly 
+ * full.
  */
-METHODDEF(boolean)
+static jboolean
 empty_output_buffer( j_compress_ptr cinfo )
 {
-	OutputBuffer *buf = (OutputBuffer *) cinfo->dest;
+	Dest *dest = (Dest *) cinfo->dest;
 
-	size_t size;
+	if( vips_target_write( dest->target, 
+		dest->buf, TARGET_BUFFER_SIZE ) )
+		ERREXIT( cinfo, JERR_FILE_WRITE );
 
-	vips_dbuf_allocate( &buf->dbuf, 10000 ); 
-	buf->pub.next_output_byte = 
-		(JOCTET *) vips_dbuf_get_write( &buf->dbuf, &size );
-	buf->pub.free_in_buffer = size;
+	dest->pub.next_output_byte = dest->buf;
+	dest->pub.free_in_buffer = TARGET_BUFFER_SIZE;
 
-	/* TRUE means we've made some more space.
-	 */
-	return( 1 );
+	return( TRUE );
 }
 
 /* Init dest method.
  */
-METHODDEF(void)
+static void
 init_destination( j_compress_ptr cinfo )
 {
-	OutputBuffer *buf = (OutputBuffer *) cinfo->dest;
+	Dest *dest = (Dest *) cinfo->dest;
 
-	vips_dbuf_init( &buf->dbuf ); 
-	empty_output_buffer( cinfo ); 
+	dest->pub.next_output_byte = dest->buf;
+	dest->pub.free_in_buffer = TARGET_BUFFER_SIZE;
 }
 
-/* Cleanup. Copy the set of blocks out as a big lump.
+/* Flush any remaining bytes to the output.
  */
-METHODDEF(void)
+static void
 term_destination( j_compress_ptr cinfo )
 {
-        OutputBuffer *buf = (OutputBuffer *) cinfo->dest;
+        Dest *dest = (Dest *) cinfo->dest;
 
-	size_t size;
+	if( vips_target_write( dest->target, 
+		dest->buf, TARGET_BUFFER_SIZE - dest->pub.free_in_buffer ) )
+		ERREXIT( cinfo, JERR_FILE_WRITE );
 
-	/* We probably won't have filled the area that was last allocated in 
-	 * empty_output_buffer(). Chop the data size down to the length that
-	 * was actually written.
-	 */
-	vips_dbuf_seek( &buf->dbuf, -buf->pub.free_in_buffer, SEEK_END );
-	vips_dbuf_truncate( &buf->dbuf ); 
-
-	*(buf->obuf) = vips_dbuf_steal( &buf->dbuf, &size );
-	*(buf->olen) = size; 
+	vips_target_finish( dest->target );
 }
 
 /* Set dest to one of our objects.
  */
 static void
-buf_dest( j_compress_ptr cinfo, void **obuf, size_t *olen )
+target_dest( j_compress_ptr cinfo, VipsTarget *target )
 {
-	OutputBuffer *buf;
+	Dest *dest;
 
-	/* The destination object is made permanent so that multiple JPEG 
-	 * images can be written to the same file without re-executing 
-	 * jpeg_stdio_dest. This makes it dangerous to use this manager and 
-	 * a different destination manager serially with the same JPEG object,
-	 * because their private object sizes may be different.  
-	 *
-	 * Caveat programmer.
-	 */
 	if( !cinfo->dest ) {    /* first time for this JPEG object? */
 		cinfo->dest = (struct jpeg_destination_mgr *)
 			(*cinfo->mem->alloc_small) 
 				( (j_common_ptr) cinfo, JPOOL_PERMANENT,
-				  sizeof( OutputBuffer ) );
+				  sizeof( Dest ) );
 	}
 
-	buf = (OutputBuffer *) cinfo->dest;
-	buf->pub.init_destination = init_destination;
-	buf->pub.empty_output_buffer = empty_output_buffer;
-	buf->pub.term_destination = term_destination;
-
-	/* Save output parameters.
-	 */
-	buf->obuf = obuf;
-	buf->olen = olen;
+	dest = (Dest *) cinfo->dest;
+	dest->pub.init_destination = init_destination;
+	dest->pub.empty_output_buffer = empty_output_buffer;
+	dest->pub.term_destination = term_destination;
+	dest->target = target;
 }
 
 int
-vips__jpeg_write_buffer( VipsImage *in, 
-	void **obuf, size_t *olen, int Q, const char *profile, 
+vips__jpeg_write_target( VipsImage *in, VipsTarget *target,
+	int Q, const char *profile, 
 	gboolean optimize_coding, gboolean progressive,
-	gboolean strip, gboolean no_subsample, gboolean trellis_quant,
-	gboolean overshoot_deringing, gboolean optimize_scans, int quant_table )
+	gboolean strip, gboolean trellis_quant,
+	gboolean overshoot_deringing, gboolean optimize_scans,
+	int quant_table, VipsForeignSubsample subsample_mode)
 {
 	Write *write;
 
 	if( !(write = write_new( in )) )
 		return( -1 );
 
-	/* Clear output parameters.
-	 */
-	*obuf = NULL;
-	*olen = 0;
-
 	/* Make jpeg compression object.
  	 */
 	if( setjmp( write->eman.jmp ) ) {
-		/* Here for longjmp() from new_error_exit().
+		/* Here for longjmp() during write_vips().
 		 */
 		write_destroy( write );
 
@@ -808,16 +866,15 @@ vips__jpeg_write_buffer( VipsImage *in,
 
 	/* Attach output.
 	 */
-        buf_dest( &write->cinfo, obuf, olen );
+        target_dest( &write->cinfo, target );
 
-	/* Convert!
+	/* Convert! Write errors come back here as an error return.
 	 */
 	if( write_vips( write, 
-		Q, profile, optimize_coding, progressive, strip, no_subsample,
+		Q, profile, optimize_coding, progressive, strip,
 		trellis_quant, overshoot_deringing, optimize_scans, 
-		quant_table ) ) {
+		quant_table, subsample_mode ) ) {
 		write_destroy( write );
-
 		return( -1 );
 	}
 	write_destroy( write );

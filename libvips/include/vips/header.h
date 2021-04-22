@@ -53,11 +53,11 @@ extern "C" {
 #define VIPS_META_XMP_NAME "xmp-data"
 
 /**
- * VIPS_META_IPCT_NAME:
+ * VIPS_META_IPTC_NAME:
  *
- * The name that read and write operations use for the image's IPCT data.
+ * The name that read and write operations use for the image's IPTC data.
  */
-#define VIPS_META_IPCT_NAME "ipct-data"
+#define VIPS_META_IPTC_NAME "iptc-data"
 
 /**
  * VIPS_META_PHOTOSHOP_NAME:
@@ -143,6 +143,20 @@ extern "C" {
  */
 #define VIPS_META_PAGE_HEIGHT "page-height"
 
+/**
+ * VIPS_META_N_PAGES:
+ *
+ * If set, the number of pages in the original file. 
+ */
+#define VIPS_META_N_PAGES "n-pages"
+
+/**
+ * VIPS_META_N_SUBIFDS:
+ *
+ * If set, the number of subifds in the first page of the file.
+ */
+#define VIPS_META_N_SUBIFDS "n-subifds"
+
 guint64 vips_format_sizeof( VipsBandFormat format );
 guint64 vips_format_sizeof_unsafe( VipsBandFormat format );
 
@@ -162,6 +176,11 @@ const char *vips_image_get_filename( const VipsImage *image );
 const char *vips_image_get_mode( const VipsImage *image );
 double vips_image_get_scale( const VipsImage *image );
 double vips_image_get_offset( const VipsImage *image );
+int vips_image_get_page_height( VipsImage *image );
+int vips_image_get_n_pages( VipsImage *image );
+int vips_image_get_n_subifds( VipsImage *image );
+int vips_image_get_orientation( VipsImage *image );
+gboolean vips_image_get_orientation_swap( VipsImage *image );
 const void *vips_image_get_data( VipsImage *image );
 
 void vips_image_init_fields( VipsImage *image, 
@@ -185,11 +204,14 @@ gchar **vips_image_get_fields( VipsImage *image );
 void vips_image_set_area( VipsImage *image, 
 	const char *name, VipsCallbackFn free_fn, void *data );
 int vips_image_get_area( const VipsImage *image, 
-	const char *name, void **data );
-void vips_image_set_blob( VipsImage *image, const char *name, 
-	VipsCallbackFn free_fn, void *data, size_t length );
-int vips_image_get_blob( const VipsImage *image, const char *name, 
-	void **data, size_t *length );
+	const char *name, const void **data );
+void vips_image_set_blob( VipsImage *image, 
+	const char *name, 
+	VipsCallbackFn free_fn, const void *data, size_t length );
+void vips_image_set_blob_copy( VipsImage *image, 
+	const char *name, const void *data, size_t length );
+int vips_image_get_blob( const VipsImage *image, 
+	const char *name, const void **data, size_t *length );
 
 int vips_image_get_int( const VipsImage *image, const char *name, int *out );
 void vips_image_set_int( VipsImage *image, const char *name, int i );
@@ -201,6 +223,17 @@ int vips_image_get_string( const VipsImage *image,
 void vips_image_set_string( VipsImage *image, 
 	const char *name, const char *str );
 void vips_image_print_field( const VipsImage *image, const char *field );
+int vips_image_get_image( const VipsImage *image, 
+	const char *name, VipsImage **out );
+void vips_image_set_image( VipsImage *image, const char *name, VipsImage *im );
+void vips_image_set_array_int( VipsImage *image, const char *name,
+	const int *array, int n );
+int vips_image_get_array_int( VipsImage *image, const char *name, 
+	int **out, int *n );
+int vips_image_get_array_double( VipsImage *image, const char *name, 
+	double **out, int *n );
+void vips_image_set_array_double( VipsImage *image, const char *name,
+	const double *array, int n );
 
 int vips_image_history_printf( VipsImage *image, const char *format, ... )
 	__attribute__((format(printf, 2, 3)));

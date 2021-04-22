@@ -41,6 +41,10 @@ extern "C" {
 /* Renamed types.
  */
 
+/* We have this misspelt in earlier versions :(
+ */
+#define VIPS_META_IPCT_NAME VIPS_META_IPTC_NAME 
+
 #define IM_D93_X0 VIPS_D93_X0 
 #define IM_D93_Y0 VIPS_D93_Y0 
 #define IM_D93_Z0 VIPS_D93_Z0 
@@ -462,7 +466,6 @@ int im_wrapmany( VipsImage **in, VipsImage *out,
 
 #define IM_META_EXIF_NAME VIPS_META_EXIF_NAME 
 #define IM_META_ICC_NAME VIPS_META_ICC_NAME 
-#define IM_META_XML VIPS_META_XML 
 #define IM_META_RESOLUTION_UNIT VIPS_META_RESOLUTION_UNIT 
 #define IM_TYPE_SAVE_STRING VIPS_TYPE_SAVE_STRING 
 #define IM_TYPE_BLOB VIPS_TYPE_BLOB 
@@ -1048,24 +1051,6 @@ int im_filename_suffix_match( const char *path, const char *suffixes[] );
 char *im_getnextoption( char **in );
 char *im_getsuboption( const char *buf );
 
-int im_lrmerge( VipsImage *ref, VipsImage *sec, VipsImage *out,
-	int dx, int dy, int mwidth );
-int im_tbmerge( VipsImage *ref, VipsImage *sec, VipsImage *out,
-	int dx, int dy, int mwidth );
-
-int im_lrmosaic( VipsImage *ref, VipsImage *sec, VipsImage *out,
-	int bandno,
-	int xref, int yref, int xsec, int ysec,
-	int hwindowsize, int hsearchsize,
-	int balancetype,
-	int mwidth );
-int im_tbmosaic( VipsImage *ref, VipsImage *sec, VipsImage *out, 
-	int bandno,
-	int xref, int yref, int xsec, int ysec, 
-	int hwindowsize, int hsearchsize,
-	int balancetype,
-	int mwidth );
-
 int im_match_linear( VipsImage *ref, VipsImage *sec, VipsImage *out,
 	int xr1, int yr1, int xs1, int ys1,
 	int xr2, int yr2, int xs2, int ys2 );
@@ -1080,19 +1065,35 @@ int im_global_balancef( VipsImage *in, VipsImage *out, double gamma );
 int im_remosaic( VipsImage *in, VipsImage *out,
 	const char *old_str, const char *new_str );
 
+int im_lrmerge( VipsImage *ref, VipsImage *sec, VipsImage *out,
+	int dx, int dy, int mwidth );
 int im_lrmerge1( VipsImage *ref, VipsImage *sec, VipsImage *out,
 	int xr1, int yr1, int xs1, int ys1,
 	int xr2, int yr2, int xs2, int ys2,
 	int mwidth );
+int im_tbmerge( VipsImage *ref, VipsImage *sec, VipsImage *out,
+	int dx, int dy, int mwidth );
 int im_tbmerge1( VipsImage *ref, VipsImage *sec, VipsImage *out,
 	int xr1, int yr1, int xs1, int ys1,
 	int xr2, int yr2, int xs2, int ys2,
 	int mwidth );
 
+int im_lrmosaic( VipsImage *ref, VipsImage *sec, VipsImage *out,
+	int bandno,
+	int xref, int yref, int xsec, int ysec,
+	int hwindowsize, int hsearchsize,
+	int balancetype,
+	int mwidth );
 int im_lrmosaic1( VipsImage *ref, VipsImage *sec, VipsImage *out, 
 	int bandno,
 	int xr1, int yr1, int xs1, int ys1, 
 	int xr2, int yr2, int xs2, int ys2,
+	int hwindowsize, int hsearchsize,
+	int balancetype,
+	int mwidth );
+int im_tbmosaic( VipsImage *ref, VipsImage *sec, VipsImage *out, 
+	int bandno,
+	int xref, int yref, int xsec, int ysec, 
 	int hwindowsize, int hsearchsize,
 	int balancetype,
 	int mwidth );
@@ -1111,13 +1112,6 @@ int im_correl( VipsImage *ref, VipsImage *sec,
 
 int im_align_bands( VipsImage *in, VipsImage *out );
 int im_maxpos_subpel( VipsImage *in, double *x, double *y );
-
-/* These were public for a while, keep for compat.
- */
-int vips_foreign_load( const char *filename, VipsImage **out, ... )
-	__attribute__((sentinel));
-int vips_foreign_save( VipsImage *in, const char *filename, ... )
-	__attribute__((sentinel));
 
 VipsImage *vips__deprecated_open_read( const char *filename, gboolean sequential );
 VipsImage *vips__deprecated_open_write( const char *filename );
@@ -1153,13 +1147,14 @@ int im__colour_unary( const char *domain,
 VipsImage **im__insert_base( const char *domain, 
 	VipsImage *in1, VipsImage *in2, VipsImage *out );
 
-int im__find_lroverlap( VipsImage *ref_in, VipsImage *sec_in, VipsImage *out,
+/* TODO(kleisauke): These are also defined in pmosaicing.h */
+int vips__find_lroverlap( VipsImage *ref_in, VipsImage *sec_in, VipsImage *out,
         int bandno_in,
         int xref, int yref, int xsec, int ysec,
         int halfcorrelation, int halfarea,
         int *dx0, int *dy0,
         double *scale1, double *angle1, double *dx1, double *dy1 );
-int im__find_tboverlap( VipsImage *ref_in, VipsImage *sec_in, VipsImage *out,
+int vips__find_tboverlap( VipsImage *ref_in, VipsImage *sec_in, VipsImage *out,
         int bandno_in,
         int xref, int yref, int xsec, int ysec,
         int halfcorrelation, int halfarea,
@@ -1184,8 +1179,6 @@ void imb_XYZ2Lab( float *, float *, int, im_colour_temperature * );
 void imb_LabS2Lab( signed short *, float *, int );
 void imb_Lab2LabS( float *, signed short *, int n );
 
-void vips__Lab2LabQ_vec( VipsPel *out, float *in, int width );
-void vips__LabQ2Lab_vec( float *out, VipsPel *in, int width );
 
 void im_copy_dmask_matrix( DOUBLEMASK *mask, double **matrix );
 void im_copy_matrix_dmask( double **matrix, DOUBLEMASK *mask );
@@ -1223,6 +1216,22 @@ int vips_check_dmask( const char *domain, DOUBLEMASK *mask );
 int vips_check_dmask_1d( const char *domain, DOUBLEMASK *mask );
 
 GOptionGroup *vips_get_option_group( void );
+
+/* old window manager API
+ */
+VipsWindow *vips_window_ref( VipsImage *im, int top, int height );
+
+FILE *vips_popenf( const char *fmt, const char *mode, ... )
+	__attribute__((format(printf, 1, 3)));
+
+/* This stuff is very, very old and should not be used by anyone now.
+ */
+#ifdef VIPS_ENABLE_ANCIENT
+#include <vips/deprecated.h>
+#endif /*VIPS_ENABLE_ANCIENT*/
+
+#include <vips/dispatch.h>
+#include <vips/almostdeprecated.h>
 
 #ifdef __cplusplus
 }

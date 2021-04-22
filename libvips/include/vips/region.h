@@ -55,9 +55,32 @@ extern "C" {
 	(G_TYPE_INSTANCE_GET_CLASS( (obj), \
 	VIPS_TYPE_REGION, VipsRegionClass ))
 
-/* Sub-area of image.
+/**
+ * VipsRegionShrink:
+ * @VIPS_REGION_SHRINK_MEAN: use the average
+ * @VIPS_REGION_SHRINK_MEDIAN: use the median
+ * @VIPS_REGION_SHRINK_MODE: use the mode
+ * @VIPS_REGION_SHRINK_MAX: use the maximum
+ * @VIPS_REGION_SHRINK_MIN: use the minimum
+ * @VIPS_REGION_SHRINK_NEAREST: use the top-left pixel
+ *
+ * How to calculate the output pixels when shrinking a 2x2 region.
  */
-typedef struct _VipsRegion {
+typedef enum {
+	VIPS_REGION_SHRINK_MEAN,
+	VIPS_REGION_SHRINK_MEDIAN,
+	VIPS_REGION_SHRINK_MODE,
+	VIPS_REGION_SHRINK_MAX,
+	VIPS_REGION_SHRINK_MIN,
+	VIPS_REGION_SHRINK_NEAREST,
+	VIPS_REGION_SHRINK_LAST
+} VipsRegionShrink;
+
+/* Sub-area of image.
+ *
+ * Matching typedef in basic.h.
+ */
+struct _VipsRegion {
 	VipsObject parent_object;
 
 	/*< public >*/
@@ -91,7 +114,7 @@ typedef struct _VipsRegion {
 	 * dropped.
 	 */
 	gboolean invalid;	
-} VipsRegion;
+};
 
 typedef struct _VipsRegionClass {
 	VipsObjectClass parent_class;
@@ -104,23 +127,32 @@ GType vips_region_get_type(void);
 
 VipsRegion *vips_region_new( VipsImage *image );
 
-int vips_region_buffer( VipsRegion *reg, VipsRect *r );
-int vips_region_image( VipsRegion *reg, VipsRect *r );
+int vips_region_buffer( VipsRegion *reg, const VipsRect *r );
+int vips_region_image( VipsRegion *reg, const VipsRect *r );
 int vips_region_region( VipsRegion *reg, VipsRegion *dest, 
-	VipsRect *r, int x, int y );
+	const VipsRect *r, int x, int y );
 int vips_region_equalsregion( VipsRegion *reg1, VipsRegion *reg2 );
 int vips_region_position( VipsRegion *reg, int x, int y );
 
-void vips_region_paint( VipsRegion *reg, VipsRect *r, int value );
-void vips_region_paint_pel( VipsRegion *reg, VipsRect *r, VipsPel *ink );
+void vips_region_paint( VipsRegion *reg, const VipsRect *r, int value );
+void vips_region_paint_pel( VipsRegion *reg, 
+	const VipsRect *r, const VipsPel *ink );
 void vips_region_black( VipsRegion *reg );
-void vips_region_copy( VipsRegion *reg, VipsRegion *dest, 
-	VipsRect *r, int x, int y );
-int vips_region_shrink( VipsRegion *from, VipsRegion *to, VipsRect *target );
+void vips_region_copy( VipsRegion *reg, VipsRegion *dest,
+	const VipsRect *r, int x, int y );
+int vips_region_shrink_method( VipsRegion *from, VipsRegion *to, 
+	const VipsRect *target, VipsRegionShrink method );
+int vips_region_shrink( VipsRegion *from, VipsRegion *to, 
+	const VipsRect *target );
 
-int vips_region_prepare( VipsRegion *reg, VipsRect *r );
-int vips_region_prepare_to( VipsRegion *reg, 
-	VipsRegion *dest, VipsRect *r, int x, int y );
+int vips_region_prepare( VipsRegion *reg, const VipsRect *r );
+int vips_region_prepare_to( VipsRegion *reg,
+	VipsRegion *dest, const VipsRect *r, int x, int y );
+
+VipsPel *vips_region_fetch( VipsRegion *region, 
+	int left, int top, int width, int height, size_t *len );
+int vips_region_width( VipsRegion *region );
+int vips_region_height( VipsRegion *region );
 
 void vips_region_invalidate( VipsRegion *reg );
 

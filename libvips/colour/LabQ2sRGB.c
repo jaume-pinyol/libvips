@@ -75,21 +75,21 @@ G_DEFINE_TYPE( VipsLabQ2sRGB, vips_LabQ2sRGB, VIPS_TYPE_COLOUR_CODE );
  *
  * There's an extra element at the end to let us do a +1 for interpolation.
  */
-static int vips_Y2v_8[256 + 1];
+int vips_Y2v_8[256 + 1];
 
 /* 8-bit sRGB -> linear lut.
  */
-static float vips_v2Y_8[256];
+float vips_v2Y_8[256];
 
 /* 16-bit linear -> sRGB lut. 
  *
  * There's an extra element at the end to let us do a +1 for interpolation.
  */
-static int vips_Y2v_16[65536 + 1];
+int vips_Y2v_16[65536 + 1];
 
 /* 16-bit sRGB -> linear lut.
  */
-static float vips_v2Y_16[65536];
+float vips_v2Y_16[65536];
 
 /* Do our own indexing of the arrays below to make sure we get efficient mults.
  */
@@ -166,12 +166,12 @@ calcul_tables_8( void *client )
 	return( NULL );
 }
 
-static void
+void
 vips_col_make_tables_RGB_8( void )
 {
 	static GOnce once = G_ONCE_INIT;
 
-	(void) g_once( &once, calcul_tables_8, NULL );
+	VIPS_ONCE( &once, calcul_tables_8, NULL ); 
 }
 
 int
@@ -190,12 +190,12 @@ calcul_tables_16( void *client )
 	return( NULL );
 }
 
-static void
+void
 vips_col_make_tables_RGB_16( void )
 {
 	static GOnce once = G_ONCE_INIT;
 
-	(void) g_once( &once, calcul_tables_16, NULL );
+	VIPS_ONCE( &once, calcul_tables_16, NULL ); 
 }
 
 int
@@ -238,7 +238,7 @@ vips_col_XYZ2scRGB( float X, float Y, float Z, float *R, float *G, float *B )
 /* Turn scRGB into sRGB. Return og=1 for out of gamut - rgb will contain an 
  * approximation of the right colour.
  *
- * Return -1 for NaN, Inf etc. 
+ * Return -1 for NaN.
  */
 static int
 vips_col_scRGB2sRGB( int range, int *lut, 
@@ -253,15 +253,13 @@ vips_col_scRGB2sRGB( int range, int *lut,
 	int Yi;
 	float v;
 
-	/* XYZ can be Nan, Inf etc. Throw those values out, they will break
+	/* RGB can be NaN. Throw those values out, they will break
 	 * our clipping.
 	 *
 	 * Don't use isnormal(), it is false for 0.0 and for subnormal
 	 * numbers. 
 	 */
-	if( VIPS_ISNAN( R ) || VIPS_ISINF( R ) ||
-		VIPS_ISNAN( G ) || VIPS_ISINF( G ) ||
-		VIPS_ISNAN( B ) || VIPS_ISINF( B ) ) {
+	if( VIPS_ISNAN( R ) || VIPS_ISNAN( G ) || VIPS_ISNAN( B ) ) {
 		*r = 0; 
 		*g = 0; 
 		*b = 0; 
@@ -276,7 +274,7 @@ vips_col_scRGB2sRGB( int range, int *lut,
 		(V) = (L); \
 		og = 1; \
 	} \
-	if( (V) > (H) ) { \
+	else if( (V) > (H) ) { \
 		(V) = (H); \
 		og = 1; \
 	} \
@@ -336,7 +334,7 @@ vips_col_scRGB2sRGB_16( float R, float G, float B,
 /* Turn scRGB into BW. Return or=1 for out of gamut - g will contain an 
  * approximation of the right colour.
  *
- * Return -1 for NaN, Inf etc. 
+ * Return -1 for NaN.
  */
 static int
 vips_col_scRGB2BW( int range, int *lut, float R, float G, float B, 
@@ -350,23 +348,18 @@ vips_col_scRGB2BW( int range, int *lut, float R, float G, float B,
 	int Yi;
 	float v;
 
-	/* RGB can be Nan, Inf etc. Throw those values out, they will break
-	 * our clipping.
-	 *
-	 * Don't use isnormal(), it is false for 0.0 and for subnormal
-	 * numbers. 
+	/* The usual ratio. We do this in linear space before we gamma.
 	 */
-	if( VIPS_ISNAN( R ) || VIPS_ISINF( R ) ||
-		VIPS_ISNAN( G ) || VIPS_ISINF( G ) ||
-		VIPS_ISNAN( B ) || VIPS_ISINF( B ) ) {
+	Y = 0.2 * R + 0.7 * G + 0.1 * B;
+
+	/* Y can be Nan. Throw those values out, they will break
+	 * our clipping.
+	 */
+	if( VIPS_ISNAN( Y ) ) {
 		*g = 0; 
 
 		return( -1 );
 	}
-
-	/* The usual ratio. We do this in linear space before we gamma.
-	 */
-	Y = 0.2 * R + 0.7 * G + 0.1 * B;
 
 	/* Look up with a float index: interpolate between the nearest two
 	 * points.
@@ -423,12 +416,11 @@ build_tables( void *client )
                                 float X, Y, Z;
                                 float Rf, Gf, Bf;
                                 int rb, gb, bb;
-                                int oflow;
  
                                 vips_col_Lab2XYZ( L, A, B, &X, &Y, &Z );
                                 vips_col_XYZ2scRGB( X, Y, Z, &Rf, &Gf, &Bf );
                                 vips_col_scRGB2sRGB_8( Rf, Gf, Bf,
-					&rb, &gb, &bb, &oflow );
+					&rb, &gb, &bb, NULL );
 
 				t = INDEX( l, a, b );
                                 vips_red[t] = rb;
@@ -446,7 +438,7 @@ vips_col_make_tables_LabQ2sRGB( void )
 {
 	static GOnce once = G_ONCE_INIT;
 
-	(void) g_once( &once, build_tables, NULL );
+	VIPS_ONCE( &once, build_tables, NULL );
 }
 
 /* Process a buffer of data.
@@ -531,9 +523,9 @@ vips_LabQ2sRGB_init( VipsLabQ2sRGB *LabQ2sRGB )
 }
 
 /**
- * vips_LabQ2sRGB:
+ * vips_LabQ2sRGB: (method)
  * @in: input image
- * @out: output image
+ * @out: (out): output image
  * @...: %NULL-terminated list of optional named arguments
  *
  * Unpack a LabQ (#VIPS_CODING_LABQ) image to a three-band short image.

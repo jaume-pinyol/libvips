@@ -1,6 +1,9 @@
 /* abstract base class for all vips objects
  *
  * Edited from nip's base class, 15/10/08
+ *
+ * 29/5/18
+ * 	- added vips_argument_get_id()
  */
 
 /*
@@ -68,11 +71,11 @@
  *
  * <emphasis>Functional class creation</emphasis> Vips objects have a very 
  * regular lifecycle: initialise, build, use, destroy. They behave rather like
- * function calls and are free of side-effects. 
+ * function calls and are free of side-effects.
  *
  * <emphasis>Run-time introspection</emphasis> Vips objects can be fully 
- * introspected at run-time. There is not need for separate source-code 
- * analysis. 
+ * introspected at run-time. There is no need for separate source-code 
+ * analysis.
  *
  * <emphasis>Command-line interface</emphasis> Any vips object can be run from
  * the command-line with the `vips` driver program. 
@@ -209,6 +212,8 @@ static GMutex *vips__object_all_lock = NULL;
 
 static guint vips_object_signals[SIG_LAST] = { 0 };
 
+/* This has to be externally visible for compatibility with older libvipses.
+ */
 int _vips__argument_id = 1;
 
 /* Keep a cache of nickname -> GType lookups.
@@ -216,6 +221,26 @@ int _vips__argument_id = 1;
 static GHashTable *vips__object_nickname_table = NULL;
 
 G_DEFINE_ABSTRACT_TYPE( VipsObject, vips_object, G_TYPE_OBJECT );
+
+/**
+ * vips_argument_get_id: (skip)
+ *
+ * Allocate a new property id. See g_object_class_install_property().
+ *
+ * Returns: a new property id > 0
+ */
+int 
+vips_argument_get_id( void )
+{
+	int id;
+
+	/* We probably don't need to lock: glib seems to single-thread class
+	 * creation.
+	 */
+	id = _vips__argument_id++;
+
+	return( id );
+}
 
 /* Don't call this directly, see vips_object_build().
  */
@@ -770,7 +795,7 @@ vips_object_get_argument( VipsObject *object, const char *name,
 }
 
 /**
- * vips_object_argument_isset:
+ * vips_object_argument_isset: 
  * @object: the object to fetch the args from
  * @name: arg to fetch
  *
@@ -793,7 +818,7 @@ vips_object_argument_isset( VipsObject *object, const char *name )
 }
 
 /**
- * vips_object_get_argument_flags:
+ * vips_object_get_argument_flags: 
  * @object: the object to fetch the args from
  * @name: arg to fetch
  *
@@ -816,7 +841,7 @@ vips_object_get_argument_flags( VipsObject *object, const char *name )
 }
 
 /**
- * vips_object_get_argument_priority:
+ * vips_object_get_argument_priority: 
  * @object: the object to fetch the args from
  * @name: arg to fetch
  *
@@ -1435,7 +1460,7 @@ vips_object_real_build( VipsObject *object )
 }
 
 static int
-vips_object_real_postbuild( VipsObject *object )
+vips_object_real_postbuild( VipsObject *object, void *data )
 {
 #ifdef DEBUG
 	printf( "vips_object_real_postbuild: " ); 
@@ -1676,7 +1701,7 @@ traverse_find_required_priority( void *data, void *a, void *b )
 }
 
 static gint
-traverse_sort( gconstpointer a, gconstpointer b )
+traverse_sort( gconstpointer a, gconstpointer b, void *user_data )
 {
 	VipsArgumentClass *class1 = (VipsArgumentClass *) a;
 	VipsArgumentClass *class2 = (VipsArgumentClass *) b;
@@ -1760,12 +1785,25 @@ vips_object_class_install_argument( VipsObjectClass *object_class,
 			g_type_name( G_TYPE_FROM_CLASS( object_class ) ),
 			g_param_spec_get_name( pspec ),
 			g_type_name( G_TYPE_FROM_CLASS( ac->object_class ) ),
-			g_param_spec_get_name( ((VipsArgument *) ac)->pspec ) ); 
+			g_param_spec_get_name( ((VipsArgument *) ac)->pspec ) );
+
+	/* Warn about optional boolean args which default TRUE. These won't
+	 * work from the CLI, since simple GOption switches don't allow
+	 * `=false`.
+	 */
+	if( !(flags & VIPS_ARGUMENT_REQUIRED) && 
+		!(flags & VIPS_ARGUMENT_DEPRECATED) && 
+		G_IS_PARAM_SPEC_BOOLEAN( pspec ) &&
+		G_PARAM_SPEC_BOOLEAN( pspec )->default_value ) 
+		g_warning( "vips_object_class_install_argument: "
+			"default TRUE BOOL arg %s.%s", 
+			g_type_name( G_TYPE_FROM_CLASS( object_class ) ),
+			g_param_spec_get_name( pspec ) );
 
 	argument_table_traverse = g_slist_prepend(
 		argument_table_traverse, argument_class );
 	argument_table_traverse = g_slist_sort(
-		argument_table_traverse, traverse_sort );
+		argument_table_traverse, (GCompareFunc) traverse_sort );
 	VIPS_SWAP( GSList *, 
 		argument_table_traverse, 
 		object_class->argument_table_traverse ); 
@@ -1848,29 +1886,48 @@ vips_object_set_argument_from_string( VipsObject *object,
 		VipsImage *out;
 		VipsOperationFlags flags;
 		VipsAccess access;
-
-		if( !value ) {
-			vips_object_no_value( object, name );
-			return( -1 );
-		}
+		char filename[VIPS_PATH_MAX];
+		char option_string[VIPS_PATH_MAX];
 
 		flags = 0;
 		if( VIPS_IS_OPERATION( object ) )
 			flags = vips_operation_get_flags( 
 				VIPS_OPERATION( object ) );
 
-		/* Read the filename. 
-		 */
-		if( flags & (VIPS_OPERATION_SEQUENTIAL_UNBUFFERED |
-			     VIPS_OPERATION_SEQUENTIAL) ) 
+		if( flags & 
+			(VIPS_OPERATION_SEQUENTIAL_UNBUFFERED | 
+			 VIPS_OPERATION_SEQUENTIAL) ) 
 			access = VIPS_ACCESS_SEQUENTIAL;
 		else
 			access = VIPS_ACCESS_RANDOM; 
 
-		if( !(out = vips_image_new_from_file( value, 
-			"access", access,
-			NULL )) )
+		if( !value ) {
+			vips_object_no_value( object, name );
 			return( -1 );
+		}
+		vips__filename_split8( value, filename, option_string );
+
+		if( strcmp( "stdin", filename ) == 0 ) {
+			VipsSource *source;
+
+			if( !(source = 
+				vips_source_new_from_descriptor( 0 )) )
+				return( -1 );
+			if( !(out = vips_image_new_from_source( source, 
+				option_string, 
+				"access", access,
+				NULL )) ) {
+				VIPS_UNREF( source );
+				return( -1 );
+			}
+			VIPS_UNREF( source );
+		}
+		else {
+			if( !(out = vips_image_new_from_file( value, 
+				"access", access,
+				NULL )) )
+				return( -1 );
+		}
 
 		g_value_init( &gvalue, VIPS_TYPE_IMAGE );
 		g_value_set_object( &gvalue, out );
@@ -1879,6 +1936,25 @@ vips_object_set_argument_from_string( VipsObject *object,
 		 * go back to 1 so that gvalue has the only ref.
 		 */
 		g_object_unref( out );
+	}
+	else if( g_type_is_a( otype, VIPS_TYPE_SOURCE ) ) { 
+		VipsSource *source;
+
+		if( !value ) {
+			vips_object_no_value( object, name );
+			return( -1 );
+		}
+
+		if( !(source = vips_source_new_from_options( value )) )
+			return( -1 );
+	
+		g_value_init( &gvalue, VIPS_TYPE_SOURCE );
+		g_value_set_object( &gvalue, source );
+
+		/* Setting gvalue will have upped @out's count again,
+		 * go back to 1 so that gvalue has the only ref.
+		 */
+		g_object_unref( source );
 	}
 	else if( g_type_is_a( otype, VIPS_TYPE_ARRAY_IMAGE ) ) { 
 		/* We have to have a special case for this, we can't just rely
@@ -1915,7 +1991,7 @@ vips_object_set_argument_from_string( VipsObject *object,
 		/* Setting gvalue will have upped @array_image's count again,
 		 * go back to 1 so that gvalue has the only ref.
 		 */
-		vips_area_unref( (VipsArea *) array_image );
+		vips_area_unref( VIPS_AREA( array_image ) );
 	}
 	else if( g_type_is_a( otype, VIPS_TYPE_OBJECT ) &&
 		(oclass = g_type_class_ref( otype )) ) { 
@@ -1950,8 +2026,8 @@ vips_object_set_argument_from_string( VipsObject *object,
 
 		b = TRUE;
 		if( value &&
-			(strcasecmp( value, "false" ) == 0 ||
-			strcasecmp( value, "no" ) == 0 ||
+			(g_ascii_strcasecmp( value, "false" ) == 0 ||
+			g_ascii_strcasecmp( value, "no" ) == 0 ||
 			strcmp( value, "0" ) == 0) )
 			b = FALSE;
 
@@ -2100,6 +2176,17 @@ vips_object_print_arg( VipsObject *object, GParamSpec *pspec, VipsBuf *buf )
 	g_value_unset( &value );
 }
 
+/* Is a filename a target, ie. it is of the form ".jpg". Any trailing options 
+ * have already been stripped. Watch out for cases like "./x.jpg".
+ */
+static gboolean
+vips_filename_istarget( const char *filename )
+{
+	const char *p;
+
+	return( (p = strrchr( filename, '.' )) && p == filename );
+}
+
 /* Write a named arg to the string. If the arg does not need a string (see
  * above), arg will be NULL.
  */
@@ -2128,14 +2215,36 @@ vips_object_get_argument_to_string( VipsObject *object,
 
 	if( g_type_is_a( otype, VIPS_TYPE_IMAGE ) ) { 
 		VipsImage *in;
-/* Pull out the image and write it.
-		 */
-		g_object_get( object, name, &in, NULL );
-		if( vips_image_write_to_file( in, arg, NULL ) ) {
-			g_object_unref( in );
-			return( -1 );
+		char filename[VIPS_PATH_MAX];
+		char option_string[VIPS_PATH_MAX];
+
+		vips__filename_split8( arg, filename, option_string );
+
+		if( vips_filename_istarget( filename ) ) {
+			VipsTarget *target;
+
+			if( !(target = vips_target_new_to_descriptor( 1 )) )
+				return( -1 );
+			g_object_get( object, name, &in, NULL );
+			if( vips_image_write_to_target( in, 
+				arg, target, NULL ) ) {
+				VIPS_UNREF( in );
+				VIPS_UNREF( target );
+				return( -1 );
+			}
+			VIPS_UNREF( in );
+			VIPS_UNREF( target );
 		}
-		g_object_unref( in );
+		else {
+			/* Pull out the image and write it.
+			 */
+			g_object_get( object, name, &in, NULL );
+			if( vips_image_write_to_file( in, arg, NULL ) ) {
+				VIPS_UNREF( in );
+				return( -1 );
+			}
+			VIPS_UNREF( in );
+		}
 	}
 	else if( g_type_is_a( otype, VIPS_TYPE_OBJECT ) &&
 		(oclass = g_type_class_ref( otype )) &&
@@ -2183,6 +2292,73 @@ vips_object_find_required( VipsObject *object )
 {
 	return( (GParamSpec *) vips_argument_map( object,
 		vips_argument_is_required, NULL, NULL ) );
+}
+
+typedef struct _VipsNameFlagsPair {
+	const char **names;
+	int *flags;
+} VipsNameFlagsPair;
+
+static void *
+vips_object_find_args( VipsObject *object,
+	GParamSpec *pspec,
+	VipsArgumentClass *argument_class,
+	VipsArgumentInstance *argument_instance,
+	void *a, void *b )
+{
+	VipsNameFlagsPair *pair = (VipsNameFlagsPair *) a;
+	int *i = (int *) b;
+
+	pair->names[*i] = g_param_spec_get_name( pspec );
+	pair->flags[*i] = (int) argument_class->flags;
+
+	*i += 1;
+
+	return( NULL );
+}
+
+/**
+ * vips_object_get_args: (skip)
+ * @object: object whose args should be retrieved
+ * @names: (transfer none) (array length=n_args) (allow-none): output array of %GParamSpec names
+ * @flags: (transfer none) (array length=n_args) (allow-none): output array of #VipsArgumentFlags
+ * @n_args: (allow-none): length of output arrays
+ *
+ * Get all %GParamSpec names and #VipsArgumentFlags for an object.
+ *
+ * This is handy for language bindings. From C, it's usually more convenient to
+ * use vips_argument_map().
+ *
+ * Returns: 0 on success, -1 on error
+ */
+int
+vips_object_get_args( VipsObject *object,
+	const char ***names, int **flags, int *n_args )
+{
+	VipsObjectClass *object_class = VIPS_OBJECT_GET_CLASS( object );
+	int n = g_slist_length( object_class->argument_table_traverse );
+
+	VipsNameFlagsPair pair;
+	int i;
+
+	pair.names = VIPS_ARRAY( object, n, const char * );
+	pair.flags = VIPS_ARRAY( object, n, int );
+	if( !pair.names ||
+		!pair.flags )
+		return( -1 );
+
+	i = 0;
+	(void) vips_argument_map( object,
+		vips_object_find_args, &pair, &i );
+
+	if( names )
+		*names = pair.names;
+	if( flags )
+		*flags = pair.flags;
+	if( n_args )
+		*n_args = n;
+
+	return( 0 );
 }
 
 /**
@@ -2268,7 +2444,7 @@ vips_object_set_valist( VipsObject *object, va_list ap )
  * |[
  * vips_object_set (operation,
  *   "input", in,
- *   "output", &amp;out,
+ *   "output", &out,
  *   NULL);
  * ]|
  *
@@ -2699,12 +2875,12 @@ vips_type_depth( GType type )
 static void *
 test_name( VipsObjectClass *class, const char *nickname )
 {
-	if( strcasecmp( class->nickname, nickname ) == 0 )
+	if( g_ascii_strcasecmp( class->nickname, nickname ) == 0 )
 		return( class );
 
 	/* Check the class name too, why not.
 	 */
-	if( strcasecmp( G_OBJECT_CLASS_NAME( class ), nickname ) == 0 )
+	if( g_ascii_strcasecmp( G_OBJECT_CLASS_NAME( class ), nickname ) == 0 )
 		return( class );
 
 	return( NULL );
@@ -2772,8 +2948,8 @@ vips_class_add_hash( VipsObjectClass *class, GHashTable *table )
 	return( NULL ); 
 }
 
-static void 
-vips_class_build_hash( void )
+static void *
+vips_class_build_hash_cb( void *dummy )
 {
 	GType base;
 
@@ -2786,6 +2962,8 @@ vips_class_build_hash( void )
 	vips_class_map_all( base, 
 		(VipsClassMapFn) vips_class_add_hash, 
 		(void *) vips__object_nickname_table );
+
+	return( NULL );
 }
 
 /**
@@ -2814,7 +2992,7 @@ vips_type_find( const char *basename, const char *nickname )
 	GType base;
 	GType type;
 
-	g_once( &once, (GThreadFunc) vips_class_build_hash, NULL ); 
+	VIPS_ONCE( &once, vips_class_build_hash_cb, NULL ); 
 
 	hit = (NicknameGType *) 
 		g_hash_table_lookup( vips__object_nickname_table, 
@@ -2878,7 +3056,7 @@ typedef struct {
 } VipsObjectLocal;
 
 static void
-vips_object_local_array_cb( GObject *parent, VipsObjectLocal *local )
+vips_object_local_array_cb( VipsObject *parent, VipsObjectLocal *local )
 {
 	int i;
 
@@ -2906,11 +3084,11 @@ vips_object_local_array_cb( GObject *parent, VipsObjectLocal *local )
  * |[
  * VipsObject **t;
  *
- * t = vips_object_local_array( a, 5 );
+ * t = vips_object_local_array( parent, 5 );
  * if( 
- *   vips_add( a, b, &amp;t[0], NULL ) ||
- *   vips_invert( t[0], &amp;t[1], NULL ) ||
- *   vips_add( t[1], t[0], &amp;t[2], NULL ) ||
+ *   vips_add( a, b, &t[0], NULL ) ||
+ *   vips_invert( t[0], &t[1], NULL ) ||
+ *   vips_add( t[1], t[0], &t[2], NULL ) ||
  *   vips_costra( t[2], out, NULL ) )
  *   return( -1 );
  * ]|
@@ -2944,7 +3122,7 @@ vips_object_set_static( VipsObject *object, gboolean static_object )
 }
 
 static void *
-vips_object_n_static_cb( VipsObject *object, int *n )
+vips_object_n_static_cb( VipsObject *object, int *n, void *b )
 {
 	if( object->static_object )
 		*n += 1;
@@ -2965,7 +3143,7 @@ vips_object_n_static( void )
 }
 
 static void *
-vips_object_print_all_cb( VipsObject *object, int *n )
+vips_object_print_all_cb( VipsObject *object, int *n, void *b )
 {
 	VipsObjectClass *class = VIPS_OBJECT_GET_CLASS( object );
 
@@ -2989,27 +3167,38 @@ vips_object_print_all_cb( VipsObject *object, int *n )
 	return( NULL );
 }
 
-void
-vips_object_print_all( void )
+int
+vips__object_leak( void )
 {
+	int n_leaks;
+
+	n_leaks = 0;
+
+	/* Don't count static objects.
+	 */
 	if( vips__object_all &&
 		g_hash_table_size( vips__object_all ) > 
 			vips_object_n_static() ) {
-		int n;
-
 		fprintf( stderr, "%d objects alive:\n", 
 			g_hash_table_size( vips__object_all ) ); 
 
-		n = 0;
 		vips_object_map( 
-			(VipsSListMap2Fn) vips_object_print_all_cb, &n, NULL );
+			(VipsSListMap2Fn) vips_object_print_all_cb, 
+			&n_leaks, NULL );
 	}
 
-	vips__type_leak();
+	return( n_leaks );
+}
+
+void
+vips_object_print_all( void )
+{
+	(void) vips__object_leak();
+	(void) vips__type_leak();
 }
 
 static void *
-vips_object_sanity_all_cb( VipsObject *object )
+vips_object_sanity_all_cb( VipsObject *object, void *a, void *b )
 {
 	(void) vips_object_sanity( object );
 

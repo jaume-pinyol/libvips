@@ -43,6 +43,7 @@
 #include <stdio.h>
 
 #include <vips/vips.h>
+#include <vips/vips7compat.h>
 #include <vips/internal.h>
 
 #include "../foreign/pforeign.h"
@@ -81,21 +82,30 @@ png2vips( const char *name, IMAGE *out, gboolean header_only )
 			return( -1 );
 	}
 
-#ifdef HAVE_PNG
-	if( header_only ) {
-		if( vips__png_header( filename, out ) )
-			return( -1 );
-	}
-	else {
-		if( vips__png_read( filename, out, TRUE ) )
-			return( -1 );
-	}
+	/* spngload does not define these vips7 compat functions.
+	 */
+#if defined(HAVE_PNG) && !defined(HAVE_SPNG)
+{
+	VipsSource *source;
+	int result;
+
+	if( !(source = vips_source_new_from_file( filename )) ) 
+		return( -1 );
+	if( header_only ) 
+		result = vips__png_header_source( source, out );
+	else 
+		result = vips__png_read_source( source, out, TRUE );
+	VIPS_UNREF( source );
+
+	if( result )
+		return( result );
+}
 #else
 	vips_error( "im_png2vips", 
 		"%s", _( "no PNG support in your libvips" ) ); 
 
 	return( -1 );
-#endif /*HAVE_PNG*/
+#endif /*HAVE_PNG && !HAVE_SPNG*/
 
 	return( 0 );
 }

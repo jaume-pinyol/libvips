@@ -10,6 +10,22 @@
  * 	- add properties flag
  * 31/5/16
  * 	- convert for jpg if jpg compression is on
+ * 19/10/17
+ * 	- predictor defaults to horizontal, reducing file size, usually
+ * 13/6/18
+ * 	- add region_shrink
+ * 8/7/19
+ * 	- add webp and zstd support
+ * 	- add @level and @lossless
+ * 4/9/18 [f--f]
+ * 	- xres/yres params were in pixels/cm
+ * 26/1/20
+ * 	- add "depth" to set pyr depth
+ * 12/5/20
+ * 	- add "subifd" to create pyr layers as sub-directories
+ * 8/6/20
+ * 	- add bitdepth support for 2 and 4 bit greyscale images
+ * 	- deprecate "squash"
  */
 
 /*
@@ -76,6 +92,7 @@ typedef struct _VipsForeignSaveTiff {
 	int tile_height;
 	gboolean pyramid;
 	gboolean squash;
+	int bitdepth;
 	gboolean miniswhite;
 	VipsForeignTiffResunit resunit;
 	double xres;
@@ -83,6 +100,12 @@ typedef struct _VipsForeignSaveTiff {
 	gboolean bigtiff;
 	gboolean rgbjpeg;
 	gboolean properties;
+	VipsRegionShrink region_shrink;
+	int level;
+	gboolean lossless;
+	VipsForeignDzDepth depth;
+	gboolean subifd;
+
 } VipsForeignSaveTiff;
 
 typedef VipsForeignSaveClass VipsForeignSaveTiffClass;
@@ -92,7 +115,7 @@ G_DEFINE_ABSTRACT_TYPE( VipsForeignSaveTiff, vips_foreign_save_tiff,
 
 #define UC VIPS_FORMAT_UCHAR
 
-/* Type promotion for save ... just always go to uchar.
+/* Type promotion for jpeg-in-tiff save ... just always go to uchar.
  */
 static int bandfmt_jpeg[10] = {
 /* UC  C   US  S   UI  I   F   X   D   DX */
@@ -132,12 +155,18 @@ vips_foreign_save_tiff_build( VipsObject *object )
 		build( object ) )
 		return( -1 );
 
-	/* Default xres/yres to the values from the image.
+	/* Default xres/yres to the values from the image. This is always
+	 * pixels/mm.
 	 */
 	if( !vips_object_argument_isset( object, "xres" ) )
-		tiff->xres = save->ready->Xres * 10.0;
+		tiff->xres = save->ready->Xres;
 	if( !vips_object_argument_isset( object, "yres" ) )
-		tiff->yres = save->ready->Yres * 10.0;
+		tiff->yres = save->ready->Yres;
+
+	/* We default to pixels/cm.
+	 */
+	tiff->xres *= 10.0;
+	tiff->yres *= 10.0;
 
 	/* resunit param overrides resunit metadata.
 	 */
@@ -198,7 +227,7 @@ vips_foreign_save_tiff_class_init( VipsForeignSaveTiffClass *class )
 		VIPS_ARGUMENT_OPTIONAL_INPUT,
 		G_STRUCT_OFFSET( VipsForeignSaveTiff, predictor ),
 		VIPS_TYPE_FOREIGN_TIFF_PREDICTOR, 
-			VIPS_FOREIGN_TIFF_PREDICTOR_NONE ); 
+			VIPS_FOREIGN_TIFF_PREDICTOR_HORIZONTAL ); 
 
 	VIPS_ARG_STRING( class, "profile", 9, 
 		_( "profile" ), 
@@ -235,13 +264,6 @@ vips_foreign_save_tiff_class_init( VipsForeignSaveTiffClass *class )
 		G_STRUCT_OFFSET( VipsForeignSaveTiff, pyramid ),
 		FALSE );
 
-	VIPS_ARG_BOOL( class, "squash", 14, 
-		_( "Squash" ), 
-		_( "Squash images down to 1 bit" ),
-		VIPS_ARGUMENT_OPTIONAL_INPUT,
-		G_STRUCT_OFFSET( VipsForeignSaveTiff, squash ),
-		FALSE );
-
 	VIPS_ARG_BOOL( class, "miniswhite", 14, 
 		_( "Miniswhite" ), 
 		_( "Use 0 for white in 1-bit images" ),
@@ -249,39 +271,39 @@ vips_foreign_save_tiff_class_init( VipsForeignSaveTiffClass *class )
 		G_STRUCT_OFFSET( VipsForeignSaveTiff, miniswhite ),
 		FALSE );
 
-	VIPS_ARG_ENUM( class, "resunit", 15, 
+	VIPS_ARG_INT( class, "bitdepth", 15,
+		_( "bitdepth" ),
+		_( "Write as a 1, 2, 4 or 8 bit image" ),
+		VIPS_ARGUMENT_OPTIONAL_INPUT,
+		G_STRUCT_OFFSET( VipsForeignSaveTiff, bitdepth ),
+		0, 8, 0 );
+
+	VIPS_ARG_ENUM( class, "resunit", 16, 
 		_( "Resolution unit" ), 
 		_( "Resolution unit" ),
 		VIPS_ARGUMENT_OPTIONAL_INPUT,
 		G_STRUCT_OFFSET( VipsForeignSaveTiff, resunit ),
 		VIPS_TYPE_FOREIGN_TIFF_RESUNIT, VIPS_FOREIGN_TIFF_RESUNIT_CM ); 
 
-	VIPS_ARG_DOUBLE( class, "xres", 16, 
+	VIPS_ARG_DOUBLE( class, "xres", 17, 
 		_( "Xres" ), 
 		_( "Horizontal resolution in pixels/mm" ),
 		VIPS_ARGUMENT_OPTIONAL_INPUT,
 		G_STRUCT_OFFSET( VipsForeignSaveTiff, xres ),
 		0.001, 1000000, 1 );
 
-	VIPS_ARG_DOUBLE( class, "yres", 17, 
+	VIPS_ARG_DOUBLE( class, "yres", 18, 
 		_( "Yres" ), 
 		_( "Vertical resolution in pixels/mm" ),
 		VIPS_ARGUMENT_OPTIONAL_INPUT,
 		G_STRUCT_OFFSET( VipsForeignSaveTiff, yres ),
 		0.001, 1000000, 1 );
 
-	VIPS_ARG_BOOL( class, "bigtiff", 18, 
+	VIPS_ARG_BOOL( class, "bigtiff", 19, 
 		_( "Bigtiff" ), 
 		_( "Write a bigtiff image" ),
 		VIPS_ARGUMENT_OPTIONAL_INPUT,
 		G_STRUCT_OFFSET( VipsForeignSaveTiff, bigtiff ),
-		FALSE );
-
-	VIPS_ARG_BOOL( class, "rgbjpeg", 20, 
-		_( "RGB JPEG" ),
-		_( "Output RGB JPEG rather than YCbCr" ),
-		VIPS_ARGUMENT_OPTIONAL_INPUT | VIPS_ARGUMENT_DEPRECATED, 
-		G_STRUCT_OFFSET( VipsForeignSaveTiff, rgbjpeg ),
 		FALSE );
 
 	VIPS_ARG_BOOL( class, "properties", 21, 
@@ -291,6 +313,55 @@ vips_foreign_save_tiff_class_init( VipsForeignSaveTiffClass *class )
 		G_STRUCT_OFFSET( VipsForeignSaveTiff, properties ),
 		FALSE );
 
+	VIPS_ARG_ENUM( class, "region_shrink", 22,
+		_( "Region shrink" ),
+		_( "Method to shrink regions" ),
+		VIPS_ARGUMENT_OPTIONAL_INPUT,
+		G_STRUCT_OFFSET( VipsForeignSaveTiff, region_shrink ),
+		VIPS_TYPE_REGION_SHRINK, VIPS_REGION_SHRINK_MEAN ); 
+
+	VIPS_ARG_INT( class, "level", 23,
+		_( "Level" ),
+		_( "ZSTD compression level" ),
+		VIPS_ARGUMENT_OPTIONAL_INPUT,
+		G_STRUCT_OFFSET( VipsForeignSaveTiff, level ),
+		1, 22, 10 );
+
+	VIPS_ARG_BOOL( class, "lossless", 24, 
+		_( "Lossless" ), 
+		_( "Enable WEBP lossless mode" ),
+		VIPS_ARGUMENT_OPTIONAL_INPUT,
+		G_STRUCT_OFFSET( VipsForeignSaveTiff, lossless ),
+		FALSE );
+
+	VIPS_ARG_ENUM( class, "depth", 25, 
+		_( "Depth" ), 
+		_( "Pyramid depth" ),
+		VIPS_ARGUMENT_OPTIONAL_INPUT,
+		G_STRUCT_OFFSET( VipsForeignSaveTiff, depth ),
+		VIPS_TYPE_FOREIGN_DZ_DEPTH, VIPS_FOREIGN_DZ_DEPTH_ONETILE ); 
+
+	VIPS_ARG_BOOL( class, "subifd", 24, 
+		_( "Sub-IFD" ), 
+		_( "Save pyr layers as sub-IFDs" ),
+		VIPS_ARGUMENT_OPTIONAL_INPUT,
+		G_STRUCT_OFFSET( VipsForeignSaveTiff, subifd ),
+		FALSE );
+
+	VIPS_ARG_BOOL( class, "rgbjpeg", 20, 
+		_( "RGB JPEG" ),
+		_( "Output RGB JPEG rather than YCbCr" ),
+		VIPS_ARGUMENT_OPTIONAL_INPUT | VIPS_ARGUMENT_DEPRECATED, 
+		G_STRUCT_OFFSET( VipsForeignSaveTiff, rgbjpeg ),
+		FALSE );
+
+	VIPS_ARG_BOOL( class, "squash", 14, 
+		_( "Squash" ), 
+		_( "Squash images down to 1 bit" ),
+		VIPS_ARGUMENT_OPTIONAL_INPUT | VIPS_ARGUMENT_DEPRECATED,
+		G_STRUCT_OFFSET( VipsForeignSaveTiff, squash ),
+		FALSE );
+
 }
 
 static void
@@ -298,12 +369,17 @@ vips_foreign_save_tiff_init( VipsForeignSaveTiff *tiff )
 {
 	tiff->compression = VIPS_FOREIGN_TIFF_COMPRESSION_NONE;
 	tiff->Q = 75;
-	tiff->predictor = VIPS_FOREIGN_TIFF_PREDICTOR_NONE;
+	tiff->predictor = VIPS_FOREIGN_TIFF_PREDICTOR_HORIZONTAL;
 	tiff->tile_width = 128;
 	tiff->tile_height = 128;
 	tiff->resunit = VIPS_FOREIGN_TIFF_RESUNIT_CM;
 	tiff->xres = 1.0;
 	tiff->yres = 1.0;
+	tiff->region_shrink = VIPS_REGION_SHRINK_MEAN;
+	tiff->level = 10;
+	tiff->lossless = FALSE;
+	tiff->depth = VIPS_FOREIGN_DZ_DEPTH_ONETILE; 
+	tiff->bitdepth = 0;
 }
 
 typedef struct _VipsForeignSaveTiffFile {
@@ -328,18 +404,30 @@ vips_foreign_save_tiff_file_build( VipsObject *object )
 		build( object ) )
 		return( -1 );
 
+        /* Handle the deprecated squash parameter.
+	 */
+        if( tiff->squash )
+		/* We set that even in the case of LAB to LABQ.
+		 */
+		tiff->bitdepth = 1;
+
 	if( vips__tiff_write( save->ready, file->filename,
 		tiff->compression, tiff->Q, tiff->predictor,
 		tiff->profile,
 		tiff->tile, tiff->tile_width, tiff->tile_height,
 		tiff->pyramid,
-		tiff->squash,
+		tiff->bitdepth,
 		tiff->miniswhite,
 		tiff->resunit, tiff->xres, tiff->yres,
 		tiff->bigtiff,
 		tiff->rgbjpeg,
 		tiff->properties,
-		save->strip ) )
+		save->strip,
+		tiff->region_shrink,
+		tiff->level,
+		tiff->lossless,
+		tiff->depth,
+		tiff->subifd ) )
 		return( -1 );
 
 	return( 0 );
@@ -401,19 +489,21 @@ vips_foreign_save_tiff_buffer_build( VipsObject *object )
 		tiff->profile,
 		tiff->tile, tiff->tile_width, tiff->tile_height,
 		tiff->pyramid,
-		tiff->squash,
+		tiff->bitdepth,
 		tiff->miniswhite,
 		tiff->resunit, tiff->xres, tiff->yres,
 		tiff->bigtiff,
 		tiff->rgbjpeg,
 		tiff->properties,
-		save->strip ) )
+		save->strip,
+		tiff->region_shrink,
+		tiff->level,
+		tiff->lossless, 
+		tiff->depth,
+		tiff->subifd ) )
 		return( -1 );
 
-	/* vips__tiff_write_buf() makes a buffer that needs g_free(), not
-	 * vips_free().
-	 */
-	blob = vips_blob_new( (VipsCallbackFn) g_free, obuf, olen );
+	blob = vips_blob_new( (VipsCallbackFn) vips_area_free_cb, obuf, olen );
 	g_object_set( object, "buffer", blob, NULL );
 	vips_area_unref( VIPS_AREA( blob ) );
 
@@ -421,7 +511,8 @@ vips_foreign_save_tiff_buffer_build( VipsObject *object )
 }
 
 static void
-vips_foreign_save_tiff_buffer_class_init( VipsForeignSaveTiffBufferClass *class )
+vips_foreign_save_tiff_buffer_class_init( 
+	VipsForeignSaveTiffBufferClass *class )
 {
 	GObjectClass *gobject_class = G_OBJECT_CLASS( class );
 	VipsObjectClass *object_class = (VipsObjectClass *) class;
@@ -449,7 +540,7 @@ vips_foreign_save_tiff_buffer_init( VipsForeignSaveTiffBuffer *buffer )
 #endif /*HAVE_TIFF*/
 
 /**
- * vips_tiffsave:
+ * vips_tiffsave: (method)
  * @in: image to save 
  * @filename: file to write to 
  * @...: %NULL-terminated list of optional named arguments
@@ -459,19 +550,23 @@ vips_foreign_save_tiff_buffer_init( VipsForeignSaveTiffBuffer *buffer )
  * * @compression: use this #VipsForeignTiffCompression
  * * @Q: %gint quality factor
  * * @predictor: use this #VipsForeignTiffPredictor
- * * @profile: filename of ICC profile to attach
- * * @tile: set %TRUE to write a tiled tiff
+ * * @profile: %gchararray, filename of ICC profile to attach
+ * * @tile: %gboolean, set %TRUE to write a tiled tiff
  * * @tile_width: %gint for tile size
  * * @tile_height: %gint for tile size
- * * @pyramid: set %TRUE to write an image pyramid
- * * @squash: set %TRUE to squash 8-bit images down to 1 bit
- * * @miniswhite: set %TRUE to write 1-bit images as MINISWHITE
+ * * @pyramid: %gboolean, write an image pyramid
+ * * @bitdepth: %int, change bit depth to 1,2, or 4 bit
+ * * @miniswhite: %gboolean, write 1-bit images as MINISWHITE
  * * @resunit: #VipsForeignTiffResunit for resolution unit
  * * @xres: %gdouble horizontal resolution in pixels/mm
  * * @yres: %gdouble vertical resolution in pixels/mm
- * * @bigtiff: set %TRUE to write a BigTiff file
- * * @properties: set %TRUE to write an IMAGEDESCRIPTION tag
- * * @strip: set %TRUE to block metadata save
+ * * @bigtiff: %gboolean, write a BigTiff file
+ * * @properties: %gboolean, set %TRUE to write an IMAGEDESCRIPTION tag
+ * * @region_shrink: #VipsRegionShrink How to shrink each 2x2 region.
+ * * @level: %gint, Zstd compression level
+ * * @lossless: %gboolean, WebP losssless mode
+ * * @depth: #VipsForeignDzDepth how deep to make the pyramid
+ * * @subifd: %gboolean write pyr layers as sub-ifds
  *
  * Write a VIPS image to a file as TIFF.
  *
@@ -480,27 +575,29 @@ vips_foreign_save_tiff_buffer_init( VipsForeignSaveTiffBuffer *buffer )
  * written as series of pages, each #VIPS_META_PAGE_HEIGHT pixels high. 
  *
  * Use @compression to set the tiff compression. Currently jpeg, packbits,
- * fax4, lzw, none and deflate are supported. The default is no compression.
+ * fax4, lzw, none, deflate, webp and zstd are supported. The default is no 
+ * compression.
  * JPEG compression is a good lossy compressor for photographs, packbits is 
  * good for 1-bit images, and deflate is the best lossless compression TIFF 
  * can do. 
  *
+ * XYZ images are automatically saved as libtiff LOGLUV with SGILOG compression.
+ * Float LAB images are saved as float CIELAB. Set @bitdepth to save as 8-bit 
+ * CIELAB.
+ *
  * Use @Q to set the JPEG compression factor. Default 75.
  *
- * Use @predictor to set the predictor for lzw and deflate compression. 
+ * User @level to set the ZSTD compression level. Use @lossless to
+ * set WEBP lossless mode on. Use @Q to set the WEBP compression level.
  *
- * Predictor is not set by default. There are three predictor values recognised
- * at the moment (2007, July): 1 is no prediction, 2 is a horizontal 
- * differencing and 3 is a floating point predictor. Refer to the libtiff 
- * specifications for further discussion of various predictors. In short, 
- * predictor helps to better compress image, especially in case of digital 
- * photos or scanned images and bit depths > 8. Try it to find whether it 
- * works for your images.
+ * Use @predictor to set the predictor for lzw, deflate and zstd compression.
+ * It defaults to #VIPS_FOREIGN_TIFF_PREDICTOR_HORIZONTAL, meaning horizontal
+ * differencing. Please refer to the libtiff 
+ * specifications for further discussion of various predictors. 
  *
  * Use @profile to give the filename of a profile to be embedded in the TIFF.
  * This does not affect the pixels which are written, just the way 
- * they are tagged. You can use the special string "none" to mean 
- * "don't attach a profile".
+ * they are tagged. See vips_profile_load() for details on profile naming. 
  *
  * If no profile is specified and the VIPS header 
  * contains an ICC profile named #VIPS_META_ICC_NAME, the
@@ -511,15 +608,27 @@ vips_foreign_save_tiff_buffer_init( VipsForeignSaveTiffBuffer *buffer )
  * is 128 by 128.
  *
  * Set @pyramid to write the image as a set of images, one per page, of
- * decreasing size. 
+ * decreasing size. Use @region_shrink to set how images will be shrunk: by
+ * default each 2x2 block is just averaged, but you can set MODE or MEDIAN as
+ * well.
  *
- * Set @squash to make 8-bit uchar images write as 1-bit TIFFs. Values >128
- * are written as white, values <=128 as black. Normally vips will write
- * MINISBLACK TIFFs where black is a 0 bit, but if you set @miniswhite, it
- * will use 0 for a white bit. Many pre-press applications only work with
- * images which use this sense. @miniswhite only affects one-bit images, it
- * does nothing for greyscale images. 
+ * By default, the pyramid stops when the image is small enough to fit in one
+ * tile. Use @depth to stop when the image fits in one pixel, or to only write
+ * a single layer.
  *
+ * Set @bitdepth to save 8-bit uchar images as 1, 2 or 4-bit TIFFs.
+ * In case of depth 1: Values >128 are written as white, values <=128 as black.
+ * Normally vips will write MINISBLACK TIFFs where black is a 0 bit, but if you
+ * set @miniswhite, it will use 0 for a white bit. Many pre-press applications
+ * only work with images which use this sense. @miniswhite only affects one-bit
+ * images, it does nothing for greyscale images.
+ * In case of depth 2: The same holds but values < 64 are written as black.
+ * For 64 <= values < 128 they are written as dark grey, for 128 <= values < 192
+ * they are written as light gray and values above are written as white.
+ * In case @miniswhite is set to true this behavior is inverted.
+ * In case of depth 4: values < 16 are written as black, and so on for the
+ * lighter shades. In case @miniswhite is set to true this behavior is inverted.
+ * 
  * Use @resunit to override the default resolution unit.  
  * The default 
  * resolution unit is taken from the header field 
@@ -541,9 +650,13 @@ vips_foreign_save_tiff_buffer_init( VipsForeignSaveTiffBuffer *buffer )
  * The value of #VIPS_META_XMP_NAME is written to
  * the XMP tag. #VIPS_META_ORIENTATION (if set) is used to set the value of 
  * the orientation
- * tag. #VIPS_META_IPCT (if set) is used to set the value of the IPCT tag.  
+ * tag. #VIPS_META_IPTC (if set) is used to set the value of the IPTC tag.  
  * #VIPS_META_PHOTOSHOP_NAME (if set) is used to set the value of the PHOTOSHOP
  * tag.
+ *
+ * By default, pyramid layers are saved as consecutive pages. 
+ * Set @subifd to save pyramid layers as sub-directories of the main image.
+ * Setting this option can improve compatibility with formats like OME.
  *
  * See also: vips_tiffload(), vips_image_write_to_file().
  *
@@ -563,10 +676,10 @@ vips_tiffsave( VipsImage *in, const char *filename, ... )
 }
 
 /**
- * vips_tiffsave_buffer:
+ * vips_tiffsave_buffer: (method)
  * @in: image to save 
- * @buf: return output buffer here
- * @len: return output length here
+ * @buf: (array length=len) (element-type guint8): return output buffer here
+ * @len: (type gsize): return output length here
  * @...: %NULL-terminated list of optional named arguments
  *
  * Optional arguments:
@@ -574,19 +687,23 @@ vips_tiffsave( VipsImage *in, const char *filename, ... )
  * * @compression: use this #VipsForeignTiffCompression
  * * @Q: %gint quality factor
  * * @predictor: use this #VipsForeignTiffPredictor
- * * @profile: filename of ICC profile to attach
- * * @tile: set %TRUE to write a tiled tiff
+ * * @profile: %gchararray, filename of ICC profile to attach
+ * * @tile: %gboolean, set %TRUE to write a tiled tiff
  * * @tile_width: %gint for tile size
  * * @tile_height: %gint for tile size
- * * @pyramid: set %TRUE to write an image pyramid
- * * @squash: set %TRUE to squash 8-bit images down to 1 bit
- * * @miniswhite: set %TRUE to write 1-bit images as MINISWHITE
+ * * @pyramid: %gboolean, write an image pyramid
+ * * @bitdepth: %int, set write bit depth to 1, 2, 4 or 8
+ * * @miniswhite: %gboolean, write 1-bit images as MINISWHITE
  * * @resunit: #VipsForeignTiffResunit for resolution unit
  * * @xres: %gdouble horizontal resolution in pixels/mm
  * * @yres: %gdouble vertical resolution in pixels/mm
- * * @bigtiff: set %TRUE to write a BigTiff file
- * * @properties: set %TRUE to write an IMAGEDESCRIPTION tag
- * * @strip: set %TRUE to block metadata save
+ * * @bigtiff: %gboolean, write a BigTiff file
+ * * @properties: %gboolean, set %TRUE to write an IMAGEDESCRIPTION tag
+ * * @region_shrink: #VipsRegionShrink How to shrink each 2x2 region.
+ * * @level: %gint, Zstd compression level
+ * * @lossless: %gboolean, WebP losssless mode
+ * * @depth: #VipsForeignDzDepth how deep to make the pyramid
+ * * @subifd: %gboolean write pyr layers as sub-ifds
  *
  * As vips_tiffsave(), but save to a memory buffer. 
  *

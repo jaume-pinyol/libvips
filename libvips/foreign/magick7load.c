@@ -4,6 +4,10 @@
  * 	- from magickload
  * 25/11/16
  * 	- add @n, deprecate @all_frames (just sets n = -1)
+ * 24/7/18
+ * 	- sniff extra filetypes
+ * 4/2/19
+ * 	- add profile (xmp, ipct, etc.) read
  */
 
 /*
@@ -50,9 +54,13 @@
 #include <vips/buf.h>
 #include <vips/internal.h>
 
+#ifdef ENABLE_MAGICKLOAD
+
 #ifdef HAVE_MAGICK7
 
 #include <MagickCore/MagickCore.h>
+
+#include "magick.h"
 
 typedef struct _VipsForeignLoadMagick7 {
 	VipsForeignLoad parent_object;
@@ -69,7 +77,11 @@ typedef struct _VipsForeignLoadMagick7 {
 	ImageInfo *image_info;
 	ExceptionInfo *exception;
 
-	int n_frames;			/* Number of frames in file */
+	/* Number of pages in image.
+	 */
+	int n_pages;
+
+	int n_frames;			/* Number of frames we will read */
 	Image **frames;			/* An Image* for each frame */
 	CacheView **cache_view; 	/* A CacheView for each frame */
 	int frame_height;	
@@ -269,31 +281,11 @@ vips_foreign_load_magick7_dispose( GObject *gobject )
 	VIPS_FREEF( DestroyImageInfo, magick7->image_info ); 
 	VIPS_FREE( magick7->frames );
 	VIPS_FREE( magick7->cache_view );
-	VIPS_FREEF( DestroyExceptionInfo, magick7->exception ); 
+	VIPS_FREEF( magick_destroy_exception, magick7->exception ); 
 	VIPS_FREEF( vips_g_mutex_free, magick7->lock );
 
 	G_OBJECT_CLASS( vips_foreign_load_magick7_parent_class )->
 		dispose( gobject );
-}
-
-static void *
-vips_foreign_load_magick7_genesis_cb( void *client )
-{
-#ifdef DEBUG
-	printf( "vips_foreign_load_magick7_genesis:\n" ); 
-#endif /*DEBUG*/
-
-	MagickCoreGenesis( vips_get_argv0(), MagickFalse );
-
-	return( NULL );
-}
-
-static void
-vips_foreign_load_magick7_genesis( void )
-{
-	static GOnce once = G_ONCE_INIT;
-
-	(void) g_once( &once, vips_foreign_load_magick7_genesis_cb, NULL );
 }
 
 static int
@@ -305,10 +297,10 @@ vips_foreign_load_magick7_build( VipsObject *object )
 	printf( "vips_foreign_load_magick7_build: %p\n", object ); 
 #endif /*DEBUG*/
 
-	vips_foreign_load_magick7_genesis();
+	magick_genesis();
 
 	magick7->image_info = CloneImageInfo( NULL );
-	magick7->exception = AcquireExceptionInfo();
+	magick7->exception = magick_acquire_exception();
 	magick7->lock = vips_g_mutex_new();
 
 	if( !magick7->image_info ) 
@@ -328,20 +320,12 @@ vips_foreign_load_magick7_build( VipsObject *object )
 	 * These window settings are attached as vips metadata, so our caller
 	 * can interpret them if it wants.
 	 */
-  	SetImageOption( magick7->image_info, "dcm:display-range", "reset" );
+  	magick_set_image_option( magick7->image_info, 
+		"dcm:display-range", "reset" );
 
-	if( magick7->page > 0 ) { 
-		 /* I can't find docs for these fields, but this seems to work.
-		  */
-		char page[256];
-
-		magick7->image_info->scene = magick7->page;
-		magick7->image_info->number_scenes = magick7->n;
-
-		vips_snprintf( page, 256, "%d-%d", 
-			magick7->page, magick7->page + magick7->n );
-		magick7->image_info->scenes = strdup( page );
-	}
+	if( magick7->page > 0 ) 
+		magick_set_number_scenes( magick7->image_info,
+			magick7->page, magick7->n );
 
 	if( VIPS_OBJECT_CLASS( vips_foreign_load_magick7_parent_class )->
 		build( object ) )
@@ -375,33 +359,33 @@ vips_foreign_load_magick7_class_init( VipsForeignLoadMagick7Class *class )
 		vips_foreign_load_magick7_get_flags_filename;
 	load_class->get_flags = vips_foreign_load_magick7_get_flags;
 
-	VIPS_ARG_BOOL( class, "all_frames", 3, 
-		_( "all_frames" ), 
-		_( "Read all frames from an image" ),
-		VIPS_ARGUMENT_OPTIONAL_INPUT | VIPS_ARGUMENT_DEPRECATED,
-		G_STRUCT_OFFSET( VipsForeignLoadMagick7, all_frames ),
-		FALSE );
-
-	VIPS_ARG_STRING( class, "density", 4,
+	VIPS_ARG_STRING( class, "density", 20,
 		_( "Density" ),
 		_( "Canvas resolution for rendering vector formats like SVG" ),
 		VIPS_ARGUMENT_OPTIONAL_INPUT,
 		G_STRUCT_OFFSET( VipsForeignLoadMagick7, density ),
 		NULL );
 
-	VIPS_ARG_INT( class, "page", 5,
+	VIPS_ARG_INT( class, "page", 21,
 		_( "Page" ),
 		_( "Load this page from the file" ),
 		VIPS_ARGUMENT_OPTIONAL_INPUT,
 		G_STRUCT_OFFSET( VipsForeignLoadMagick7, page ),
 		0, 100000, 0 );
 
-	VIPS_ARG_INT( class, "n", 6,
+	VIPS_ARG_INT( class, "n", 22,
 		_( "n" ),
 		_( "Load this many pages" ),
 		VIPS_ARGUMENT_OPTIONAL_INPUT,
 		G_STRUCT_OFFSET( VipsForeignLoadMagick7, n ),
 		-1, 100000, 1 );
+
+	VIPS_ARG_BOOL( class, "all_frames", 23, 
+		_( "all_frames" ), 
+		_( "Read all frames from an image" ),
+		VIPS_ARGUMENT_OPTIONAL_INPUT | VIPS_ARGUMENT_DEPRECATED,
+		G_STRUCT_OFFSET( VipsForeignLoadMagick7, all_frames ),
+		FALSE );
 
 }
 
@@ -422,13 +406,33 @@ vips_foreign_load_magick7_error( VipsForeignLoadMagick7 *magick7 )
 }
 
 static int
+magick7_get_bands( Image *image )
+{
+	int bands;
+	int i;
+
+	/* We skip all index channels. Lots of images can have these, it's not
+	 * just the palette ones.
+	 */
+	bands = 0;
+	for( i = 0; i < GetPixelChannels( image ); i++ ) { 
+		PixelChannel channel = GetPixelChannelChannel( image, i ); 
+
+		if( channel != IndexPixelChannel ) 
+			bands += 1;
+	} 
+
+	return( bands );
+}
+
+static int
 vips_foreign_load_magick7_parse( VipsForeignLoadMagick7 *magick7, 
 	Image *image, VipsImage *out )
 {
 	VipsObjectClass *class = VIPS_OBJECT_GET_CLASS( magick7 );
 
 	const char *key;
-	int i;
+	Image *p;
 
 #ifdef DEBUG
 	printf( "image->depth = %zd\n", image->depth ); 
@@ -444,17 +448,18 @@ vips_foreign_load_magick7_parse( VipsForeignLoadMagick7 *magick7,
 	out->Xsize = image->columns;
 	out->Ysize = image->rows;
 	magick7->frame_height = image->rows;
-
-	/* We skip all index channels. Lots of images can have these, it's not
-	 * just the palette ones.
-	 */
-	out->Bands = 0;
-	for( i = 0; i < GetPixelChannels( image ); i++ ) { 
-		PixelChannel channel = GetPixelChannelChannel( image, i ); 
-		
-		if( channel != IndexPixelChannel ) 
-			out->Bands += 1;
-	} 
+	out->Bands = magick7_get_bands( image ); 
+	if( out->Xsize <= 0 ||
+		out->Ysize <= 0 ||
+		out->Bands <= 0 ||
+		out->Xsize >= VIPS_MAX_COORD ||
+		out->Ysize >= VIPS_MAX_COORD ||
+		out->Bands >= VIPS_MAX_COORD ) {
+		vips_error( class->nickname, 
+			_( "bad image dimensions %d x %d pixels, %d bands" ),
+			out->Xsize, out->Ysize, out->Bands );
+		return( -1 );
+	}
 
 	/* Depth can be 'fractional'. You'd think we should use
 	 * GetImageDepth() but that seems to compute something very complex. 
@@ -483,14 +488,8 @@ vips_foreign_load_magick7_parse( VipsForeignLoadMagick7 *magick7,
 			out->Type = VIPS_INTERPRETATION_B_W;
 		break;
 
-	case RGBColorspace:
-		if( out->BandFmt == VIPS_FORMAT_USHORT )
-			out->Type = VIPS_INTERPRETATION_RGB16;
-		else
-			out->Type = VIPS_INTERPRETATION_RGB;
-		break;
-
 	case sRGBColorspace:
+	case RGBColorspace:
 		if( out->BandFmt == VIPS_FORMAT_USHORT )
 			out->Type = VIPS_INTERPRETATION_RGB16;
 		else
@@ -503,8 +502,8 @@ vips_foreign_load_magick7_parse( VipsForeignLoadMagick7 *magick7,
 
 	default:
 		vips_error( class->nickname, 
-			_( "unsupported colorspace %d" ), 
-			(int) image->colorspace );
+			_( "unsupported colorspace %s" ), 
+			magick_ColorspaceType2str( image->colorspace ) );
 		return( -1 );
 	}
 
@@ -535,7 +534,7 @@ vips_foreign_load_magick7_parse( VipsForeignLoadMagick7 *magick7,
 
 	vips_image_pipelinev( out, VIPS_DEMAND_STYLE_SMALLTILE, NULL );
 
-	/* Get all the metadata.
+	/* Get all the string metadata.
 	 */
 	ResetImagePropertyIterator( image );
 	while( (key = GetNextImageProperty( image )) ) {
@@ -552,16 +551,48 @@ vips_foreign_load_magick7_parse( VipsForeignLoadMagick7 *magick7,
 		vips_image_set_string( out, vips_buf_all( &name ), value );
 	}
 
+	/* Set vips metadata from ImageMagick profiles.
+	 */
+	if( magick_set_vips_profile( out, image ) )
+		return( -1 );
+
+	magick7->n_pages = GetImageListLength( GetFirstImageInList( image ) );
+#ifdef DEBUG
+	printf( "image has %d pages\n", magick7->n_pages );
+#endif /*DEBUG*/
+
 	/* Do we have a set of equal-sized frames? Append them.
 
 	   	FIXME ... there must be an attribute somewhere from dicom read 
 		which says this is a volumetric image
 
 	 */
-	magick7->n_frames = GetImageListLength( GetFirstImageInList( image ) );
+	magick7->n_frames = 0;
+	for( p = image; p; (p = GetNextImageInList( p )) ) {
+		if( p->columns != (unsigned int) out->Xsize ||
+			p->rows != (unsigned int) out->Ysize ||
+			magick7_get_bands( p ) != out->Bands ||
+			p->depth != image->depth ) {
+#ifdef DEBUG
+			printf( "frame %d differs\n", magick7->n_frames );
+			printf( "%zdx%zd, %d bands\n", 
+				p->columns, p->rows, magick7_get_bands( p ) );
+			printf( "first frame is %dx%d, %d bands\n", 
+				out->Xsize, out->Ysize, out->Bands );
+#endif /*DEBUG*/
+
+			break;
+		}
+
+		magick7->n_frames += 1;
+	}
+	if( p ) 
+		/* Nope ... just do the first image in the list.
+		 */
+		magick7->n_frames = 1;
 
 #ifdef DEBUG
-	printf( "image has %d frames\n", magick7->n_frames );
+	printf( "will read %d frames\n", magick7->n_frames );
 #endif /*DEBUG*/
 
 	if( magick7->n != -1 )
@@ -569,16 +600,18 @@ vips_foreign_load_magick7_parse( VipsForeignLoadMagick7 *magick7,
 
 	/* So we can finally set the height.
 	 */
-	if( magick7->n_frames > 1 ) {
+	if( vips_object_argument_isset( VIPS_OBJECT( magick7 ), "n" ) ) {
 		vips_image_set_int( out, VIPS_META_PAGE_HEIGHT, out->Ysize );
 		out->Ysize *= magick7->n_frames;
 	}
 
+	vips_image_set_int( out, VIPS_META_N_PAGES, magick7->n_pages );
+
 	return( 0 );
 }
 
-/* We don't bother with GetPixelReadMask((), assume it's everywhere. Don't
- * bother with traits, assume taht's always update.
+/* We don't bother with GetPixelReadMask(), assume it's everywhere. Don't
+ * bother with traits, assume that's always updated.
  *
  * We do skip index channels. Palette images add extra index channels
  * containing the index value from the file before colourmap lookup.
@@ -679,7 +712,8 @@ vips_foreign_load_magick7_load( VipsForeignLoadMagick7 *magick7 )
 	/* Record frame pointers.
 	 */
 	g_assert( !magick7->frames ); 
-	if( !(magick7->frames = VIPS_ARRAY( NULL, magick7->n_frames, Image * )) )
+	if( !(magick7->frames = 
+		VIPS_ARRAY( NULL, magick7->n_frames, Image * )) )
 		return( -1 );
 	p = magick7->image;
 	for( i = 0; i < magick7->n_frames; i++ ) {
@@ -728,25 +762,13 @@ G_DEFINE_TYPE( VipsForeignLoadMagick7File, vips_foreign_load_magick7_file,
 static gboolean
 ismagick7( const char *filename )
 {
-	Image *image;
-	ImageInfo *image_info;
-	ExceptionInfo *exception;
-	int result;
-
-	vips_foreign_load_magick7_genesis();
-
-	/* Horribly slow :-(
+	/* Fetch up to the first 100 bytes. Hopefully that'll be enough.
 	 */
-	image_info = CloneImageInfo( NULL );
-	exception = AcquireExceptionInfo();
-	vips_strncpy( image_info->filename, filename, MagickPathExtent );
-	image = PingImage( image_info, exception );
-	result = image != NULL;
-	VIPS_FREEF( DestroyImageList, image );
-	VIPS_FREEF( DestroyImageInfo, image_info ); 
-	VIPS_FREEF( DestroyExceptionInfo, exception ); 
+	unsigned char buf[100];
+	int len;
 
-	return( result );
+	return( (len = vips__get_bytes( filename, buf, 100 )) > 10 &&
+		magick_ismagick( buf, len ) );
 }
 
 static int
@@ -761,6 +783,8 @@ vips_foreign_load_magick7_file_header( VipsForeignLoad *load )
 
 	vips_strncpy( magick7->image_info->filename, file->filename, 
 		MagickPathExtent );
+
+	magick_sniff_file( magick7->image_info, file->filename );
 
 	/* It would be great if we could PingImage and just read the header,
 	 * but sadly many IM coders do not support ping. The critical one for
@@ -828,24 +852,7 @@ G_DEFINE_TYPE( VipsForeignLoadMagick7Buffer, vips_foreign_load_magick7_buffer,
 static gboolean
 vips_foreign_load_magick7_buffer_is_a_buffer( const void *buf, size_t len )
 {
-	Image *image;
-	ImageInfo *image_info;
-	ExceptionInfo *exception;
-	int result;
-
-	vips_foreign_load_magick7_genesis();
-
-	/* Horribly slow :-(
-	 */
-	image_info = CloneImageInfo( NULL );
-	exception = AcquireExceptionInfo();
-	image = PingBlob( image_info, buf, len, exception );
-	result = image != NULL;
-	VIPS_FREEF( DestroyImageList, image );
-	VIPS_FREEF( DestroyImageInfo, image_info ); 
-	VIPS_FREEF( DestroyExceptionInfo, exception ); 
-
-	return( result );
+	return( len > 10 && magick_ismagick( (const unsigned char *) buf, len ) );
 }
 
 static int
@@ -865,6 +872,8 @@ vips_foreign_load_magick7_buffer_header( VipsForeignLoad *load )
 	 * 
 	 * We have to read the whole image in _header.
 	 */
+	magick_sniff_bytes( magick7->image_info, 
+		magick7_buffer->buf->data, magick7_buffer->buf->length );
 	magick7->image = BlobToImage( magick7->image_info, 
 		magick7_buffer->buf->data, magick7_buffer->buf->length,
 		magick7->exception );
@@ -911,3 +920,5 @@ vips_foreign_load_magick7_buffer_init( VipsForeignLoadMagick7Buffer *buffer )
 }
 
 #endif /*HAVE_MAGICK7*/
+
+#endif /*ENABLE_MAGICKLOAD*/

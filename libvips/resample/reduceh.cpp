@@ -8,6 +8,9 @@
  * 	- rename xshrink as hshrink for consistency
  * 9/9/16
  * 	- add @centre option
+ * 6/6/20 kleisauke
+ * 	- deprecate @centre option, it's now always on
+ * 	- fix pixel shift
  */
 
 /*
@@ -57,17 +60,6 @@
 #include "presample.h"
 #include "templates.h"
 
-/**
- * VipsKernel: 
- * @VIPS_KERNEL_NEAREST: nearest-neighbour
- * @VIPS_KERNEL_LINEAR: linear interpolation
- * @VIPS_KERNEL_CUBIC: cubic interpolation
- * @VIPS_KERNEL_LANCZOS2: lanczos2 interpolation
- * @VIPS_KERNEL_LANCZOS3: lanczos3 interpolation
- *
- * 1D resampling kernels. 
- */
-
 typedef struct _VipsReduceh {
 	VipsResample parent_instance;
 
@@ -77,13 +69,13 @@ typedef struct _VipsReduceh {
 	 */
 	VipsKernel kernel;
 
-	/* Use centre rather than corner sampling convention.
-	 */
-	gboolean centre;
-
 	/* Number of points in kernel.
 	 */
 	int n_point;
+
+	/* Horizontal displacement.
+	 */
+	double hoffset;
 
 	/* Precalculated interpolation matrices. int (used for pel
 	 * sizes up to short), and double (for all others). We go to
@@ -91,6 +83,10 @@ typedef struct _VipsReduceh {
 	 */
 	int *matrixi[VIPS_TRANSFORM_SCALE + 1];
 	double *matrixf[VIPS_TRANSFORM_SCALE + 1];
+
+	/* Deprecated.
+	 */
+	gboolean centre;
 
 } VipsReduceh;
 
@@ -112,18 +108,19 @@ vips_reduce_get_points( VipsKernel kernel, double shrink )
 		return( 1 ); 
 
 	case VIPS_KERNEL_LINEAR:
-		return( 2 ); 
+		return( 2 * rint( shrink ) + 1 ); 
 
 	case VIPS_KERNEL_CUBIC:
-		return( 4 ); 
+	case VIPS_KERNEL_MITCHELL:
+		return( 2 * rint( 2 * shrink ) + 1 ); 
 
 	case VIPS_KERNEL_LANCZOS2:
 		/* Needs to be in sync with calculate_coefficients_lanczos().
 		 */
-		return( rint( 2 * 2 * shrink ) + 1 ); 
+		return( 2 * rint( 2 * shrink ) + 1 ); 
 
 	case VIPS_KERNEL_LANCZOS3:
-		return( rint( 2 * 3 * shrink ) + 1 ); 
+		return( 2 * rint( 3 * shrink ) + 1 ); 
 
 	default:
 		g_assert_not_reached();
@@ -142,12 +139,18 @@ vips_reduce_make_mask( double *c, VipsKernel kernel, double shrink, double x )
 		break;
 
 	case VIPS_KERNEL_LINEAR:
-		c[0] = 1.0 - x;
-		c[1] = x;
+		calculate_coefficients_triangle( c, shrink, x ); 
 		break;
 
 	case VIPS_KERNEL_CUBIC:
-		calculate_coefficients_catmull( c, x ); 
+		/* Catmull-Rom.
+		 */
+		calculate_coefficients_cubic( c, shrink, x, 0.0, 0.5 );
+		break;
+
+	case VIPS_KERNEL_MITCHELL:
+		calculate_coefficients_cubic( c, shrink, x, 
+			1.0 / 3.0, 1.0 / 3.0 );
 		break;
 
 	case VIPS_KERNEL_LANCZOS2:
@@ -198,13 +201,11 @@ reduceh_signed_int_tab( VipsReduceh *reduceh,
 	for( int z = 0; z < bands; z++ ) {
 		int sum;
 
-		sum = reduce_sum<T, int>( in, bands, cx, n );
+		sum = reduce_sum<T, int>( in + z, bands, cx, n );
 		sum = signed_fixed_round( sum ); 
 		sum = VIPS_CLIP( min_value, sum, max_value ); 
 
 		out[z] = sum;
-
-		in += 1;
 	}
 }
 
@@ -220,10 +221,8 @@ reduceh_float_tab( VipsReduceh *reduceh,
 	const T* restrict in = (T *) pin;
 	const int n = reduceh->n_point;
 
-	for( int z = 0; z < bands; z++ ) {
-		out[z] = reduce_sum<T, double>( in, bands, cx, n );
-		in += 1;
-	}
+	for( int z = 0; z < bands; z++ )
+		out[z] = reduce_sum<T, double>( in + z, bands, cx, n );
 }
 
 /* 32-bit int output needs a double intermediate.
@@ -242,10 +241,8 @@ reduceh_unsigned_int32_tab( VipsReduceh *reduceh,
 	for( int z = 0; z < bands; z++ ) {
 		double sum;
 
-		sum = reduce_sum<T, double>( in, bands, cx, n );
-		out[z] = VIPS_CLIP( 0, sum, max_value ); 
-
-		in += 1;
+		sum = reduce_sum<T, double>( in + z, bands, cx, n );
+		out[z] = VIPS_CLIP( 0, sum, max_value );
 	}
 }
 
@@ -262,11 +259,9 @@ reduceh_signed_int32_tab( VipsReduceh *reduceh,
 	for( int z = 0; z < bands; z++ ) {
 		double sum;
 
-		sum = reduce_sum<T, double>( in, bands, cx, n );
+		sum = reduce_sum<T, double>( in + z, bands, cx, n );
 		sum = VIPS_CLIP( min_value, sum, max_value ); 
 		out[z] = sum;
-
-		in += 1;
 	}
 }
 
@@ -287,9 +282,10 @@ reduceh_notab( VipsReduceh *reduceh,
 	vips_reduce_make_mask( cx, reduceh->kernel, reduceh->hshrink, x ); 
 
 	for( int z = 0; z < bands; z++ ) {
-		out[z] = reduce_sum<T, double>( in, bands, cx, n );
+		double sum;
+		sum = reduce_sum<T, double>( in + z, bands, cx, n );
 
-		in += 1;
+		out[z] = VIPS_ROUND_UINT( sum );
 	}
 }
 
@@ -319,18 +315,16 @@ vips_reduceh_gen( VipsRegion *out_region, void *seq,
 		r->width, r->height, r->left, r->top ); 
 #endif /*DEBUG*/
 
-	s.left = r->left * reduceh->hshrink;
+	s.left = r->left * reduceh->hshrink - reduceh->hoffset;
 	s.top = r->top;
 	s.width = r->width * reduceh->hshrink + reduceh->n_point;
 	s.height = r->height;
-	if( reduceh->centre )
-		s.width += 1;
 	if( vips_region_prepare( ir, &s ) )
 		return( -1 );
 
 	VIPS_GATE_START( "vips_reduceh_gen: work" ); 
 
-	for( int y = 0; y < r->height; y ++ ) { 
+	for( int y = 0; y < r->height; y++ ) { 
 		VipsPel *p0;
 		VipsPel *q;
 
@@ -338,9 +332,8 @@ vips_reduceh_gen( VipsRegion *out_region, void *seq,
 
 		q = VIPS_REGION_ADDR( out_region, r->left, r->top + y );
 
-		X = r->left * reduceh->hshrink;
-		if( reduceh->centre )
-			X += 0.5;
+		X = (r->left + 0.5) * reduceh->hshrink - 0.5 - 
+			reduceh->hoffset;
 
 		/* We want p0 to be the start (ie. x == 0) of the input 
 		 * scanline we are reading from. We can then calculate the p we
@@ -355,7 +348,7 @@ vips_reduceh_gen( VipsRegion *out_region, void *seq,
 			ir->valid.left * ps;
 
 		for( int x = 0; x < r->width; x++ ) {
-			int ix = (int) X;
+			const int ix = (int) X;
 			VipsPel *p = p0 + ix * ps;
 			const int sx = X * VIPS_TRANSFORM_SCALE * 2;
 			const int six = sx & (VIPS_TRANSFORM_SCALE * 2 - 1);
@@ -445,7 +438,7 @@ vips_reduceh_build( VipsObject *object )
 		vips_object_local_array( object, 2 );
 
 	VipsImage *in;
-	int width;
+	double width, extra_pixels;
 
 	if( VIPS_OBJECT_CLASS( vips_reduceh_parent_class )->build( object ) )
 		return( -1 );
@@ -461,16 +454,36 @@ vips_reduceh_build( VipsObject *object )
 	if( reduceh->hshrink == 1 ) 
 		return( vips_image_write( in, resample->out ) );
 
-	/* Build the tables of pre-computed coefficients.
-	 */
 	reduceh->n_point = 
 		vips_reduce_get_points( reduceh->kernel, reduceh->hshrink ); 
-	g_info( "%d point mask", reduceh->n_point );
+	g_info( "reduceh: %d point mask", reduceh->n_point );
 	if( reduceh->n_point > MAX_POINT ) {
 		vips_error( object_class->nickname, 
 			"%s", _( "reduce factor too large" ) );
 		return( -1 );
 	}
+
+	/* Output size. We need to always round to nearest, so round(), not
+	 * rint().
+	 */
+	width = VIPS_ROUND_UINT(
+		(double) resample->in->Xsize / reduceh->hshrink );
+
+	/* How many pixels we are inventing in the input, -ve for
+	 * discarding.
+	 */
+	extra_pixels =
+		width * reduceh->hshrink - resample->in->Xsize;
+
+	/* If we are rounding down, we are not using some input
+	 * pixels. We need to move the origin *inside* the input image
+	 * by half that distance so that we discard pixels equally
+	 * from left and right. 
+	 */
+	reduceh->hoffset = (1 + extra_pixels) / 2.0 - 1;
+
+	/* Build the tables of pre-computed coefficients.
+	 */
 	for( int x = 0; x < VIPS_TRANSFORM_SCALE + 1; x++ ) {
 		reduceh->matrixf[x] = 
 			VIPS_ARRAY( object, reduceh->n_point, double ); 
@@ -487,6 +500,13 @@ vips_reduceh_build( VipsObject *object )
 		for( int i = 0; i < reduceh->n_point; i++ )
 			reduceh->matrixi[x][i] = reduceh->matrixf[x][i] * 
 				VIPS_INTERPOLATE_SCALE;
+
+#ifdef DEBUG
+		printf( "vips_reduceh_build: mask %d\n    ", x );
+		for( int i = 0; i < reduceh->n_point; i++ )
+			printf( "%d ", reduceh->matrixi[x][i] );
+		printf( "\n" ); 
+#endif /*DEBUG*/
 	}
 
 	/* Unpack for processing.
@@ -496,22 +516,17 @@ vips_reduceh_build( VipsObject *object )
 	in = t[0];
 
 	/* Add new pixels around the input so we can interpolate at the edges.
-	 * In centre mode, we read 0.5 pixels more to the right, so we must
-	 * enlarge a little further.
 	 */
-	width = in->Xsize + reduceh->n_point - 1;
-	if( reduceh->centre )
-		width += 1;
 	if( vips_embed( in, &t[1], 
-		reduceh->n_point / 2 - 1, 0, 
-		width, in->Ysize,
+		VIPS_CEIL( reduceh->n_point / 2.0 ) - 1, 0, 
+		in->Xsize + reduceh->n_point, in->Ysize,
 		"extend", VIPS_EXTEND_COPY,
-		NULL ) )
+		(void *) NULL ) )
 		return( -1 );
 	in = t[1];
 
 	if( vips_image_pipelinev( resample->out, 
-		VIPS_DEMAND_STYLE_THINSTRIP, in, NULL ) )
+		VIPS_DEMAND_STYLE_THINSTRIP, in, (void *) NULL ) )
 		return( -1 );
 
 	/* Size output. We need to always round to nearest, so round(), not
@@ -521,8 +536,7 @@ vips_reduceh_build( VipsObject *object )
 	 * example, vipsthumbnail knows the true reduce factor (including the
 	 * fractional part), we just see the integer part here.
 	 */
-	resample->out->Xsize = VIPS_ROUND_UINT( 
-		resample->in->Xsize / reduceh->hshrink );
+	resample->out->Xsize = width;
 	if( resample->out->Xsize <= 0 ) { 
 		vips_error( object_class->nickname, 
 			"%s", _( "image has shrunk to nothing" ) );
@@ -562,7 +576,7 @@ vips_reduceh_class_init( VipsReducehClass *reduceh_class )
 	vobject_class->description = _( "shrink an image horizontally" );
 	vobject_class->build = vips_reduceh_build;
 
-	operation_class->flags = VIPS_OPERATION_SEQUENTIAL_UNBUFFERED;
+	operation_class->flags = VIPS_OPERATION_SEQUENTIAL;
 
 	VIPS_ARG_DOUBLE( reduceh_class, "hshrink", 3, 
 		_( "Hshrink" ), 
@@ -571,19 +585,12 @@ vips_reduceh_class_init( VipsReducehClass *reduceh_class )
 		G_STRUCT_OFFSET( VipsReduceh, hshrink ),
 		1, 1000000, 1 );
 
-	VIPS_ARG_ENUM( reduceh_class, "kernel", 3, 
+	VIPS_ARG_ENUM( reduceh_class, "kernel", 4, 
 		_( "Kernel" ), 
 		_( "Resampling kernel" ),
 		VIPS_ARGUMENT_OPTIONAL_INPUT,
 		G_STRUCT_OFFSET( VipsReduceh, kernel ),
 		VIPS_TYPE_KERNEL, VIPS_KERNEL_LANCZOS3 );
-
-	VIPS_ARG_BOOL( reduceh_class, "centre", 7, 
-		_( "Centre" ), 
-		_( "Use centre sampling convention" ),
-		VIPS_ARGUMENT_OPTIONAL_INPUT,
-		G_STRUCT_OFFSET( VipsReduceh, centre ),
-		FALSE );
 
 	/* Old name.
 	 */
@@ -594,6 +601,15 @@ vips_reduceh_class_init( VipsReducehClass *reduceh_class )
 		G_STRUCT_OFFSET( VipsReduceh, hshrink ),
 		1, 1000000, 1 );
 
+	/* We used to let people pick centre or corner, but it's automatic now.
+	 */
+	VIPS_ARG_BOOL( reduceh_class, "centre", 7,
+		_( "Centre" ),
+		_( "Use centre sampling convention" ),
+		VIPS_ARGUMENT_OPTIONAL_INPUT | VIPS_ARGUMENT_DEPRECATED,
+		G_STRUCT_OFFSET( VipsReduceh, centre ),
+		FALSE );
+
 }
 
 static void
@@ -602,34 +618,9 @@ vips_reduceh_init( VipsReduceh *reduceh )
 	reduceh->kernel = VIPS_KERNEL_LANCZOS3;
 }
 
-/**
- * vips_reduceh:
- * @in: input image
- * @out: output image
- * @hshrink: horizontal reduce
- * @...: %NULL-terminated list of optional named arguments
- *
- * Optional arguments:
- *
- * * @kernel: #VipsKernel to use to interpolate (default: lanczos3)
- * * @centre: %gboolean use centre rather than corner sampling convention
- *
- * Reduce @in horizontally by a float factor. The pixels in @out are
- * interpolated with a 1D mask generated by @kernel.
- *
- * Set @centre to use centre rather than corner sampling convention. Centre
- * convention can be useful to match the behaviour of other systems. 
- *
- * This is a very low-level operation: see vips_resize() for a more
- * convenient way to resize images. 
- *
- * This operation does not change xres or yres. The image resolution needs to
- * be updated by the application. 
- *
- * See also: vips_shrink(), vips_resize(), vips_affine().
- *
- * Returns: 0 on success, -1 on error
+/* See reduce.c for the doc comment.
  */
+
 int
 vips_reduceh( VipsImage *in, VipsImage **out, double hshrink, ... )
 {

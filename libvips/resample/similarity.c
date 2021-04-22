@@ -10,6 +10,11 @@
  * 	- oops, missing scale from b, thanks Topochicho
  * 7/2/16
  * 	- use vips_reduce(), if we can
+ * 17/11/17
+ * `	- add optional "background" param
+ * `	- don't use vips_reduce() since it has no "background" param
+ * 10/3/18
+ * 	- add vips_rotate() class for convenience
  */
 
 /*
@@ -55,104 +60,131 @@
 
 #include "presample.h"
 
-typedef struct _VipsSimilarity {
+typedef struct _VipsSimilarityBase {
 	VipsResample parent_instance;
 
 	double scale;
 	double angle;
 	VipsInterpolate *interpolate;
+	VipsArrayDouble *background;
 	double odx;
 	double ody;
 	double idx;
 	double idy;
 
-} VipsSimilarity;
+} VipsSimilarityBase;
 
-typedef VipsResampleClass VipsSimilarityClass;
+typedef VipsResampleClass VipsSimilarityBaseClass;
 
-G_DEFINE_TYPE( VipsSimilarity, vips_similarity, VIPS_TYPE_RESAMPLE );
-
-/* Map interpolator names to vips kernels.
- */
-typedef struct _VipsInterpolateKernel {
-	const char *nickname;
-	VipsKernel kernel;
-} VipsInterpolateKernel;
-
-static VipsInterpolateKernel vips_similarity_kernel[] = {
-	{ "bicubic", VIPS_KERNEL_CUBIC },
-	{ "bilinear", VIPS_KERNEL_LINEAR },
-	{ "nearest", VIPS_KERNEL_NEAREST }
-}; 
+G_DEFINE_ABSTRACT_TYPE( VipsSimilarityBase, vips_similarity_base, 
+	VIPS_TYPE_RESAMPLE );
 
 static int
-vips_similarity_build( VipsObject *object )
+vips_similarity_base_build( VipsObject *object )
 {
 	VipsResample *resample = VIPS_RESAMPLE( object );
-	VipsSimilarity *similarity = (VipsSimilarity *) object;
+	VipsSimilarityBase *base = (VipsSimilarityBase *) object;
 	VipsImage **t = (VipsImage **) 
 		vips_object_local_array( object, 4 );
+	double a = base->scale * cos( VIPS_RAD( base->angle ) ); 
+	double b = base->scale * -sin( VIPS_RAD( base->angle ) );
+	double c = -b;
+	double d = a;
 
-	gboolean handled;
-
-	if( VIPS_OBJECT_CLASS( vips_similarity_parent_class )->build( object ) )
+	if( VIPS_OBJECT_CLASS( vips_similarity_base_parent_class )->
+		build( object ) )
 		return( -1 );
 
-	handled = FALSE;
-
-	/* Use vips_reduce(), if we can.
-	 */
-	if( similarity->interpolate &&
-		similarity->angle == 0.0 &&
-		similarity->idx == 0.0 &&
-		similarity->idy == 0.0 &&
-		similarity->odx == 0.0 &&
-		similarity->ody == 0.0 ) {
-		const char *nickname = VIPS_OBJECT_GET_CLASS( 
-			similarity->interpolate )->nickname;
-
-		int i; 
-
-		for( i = 0; i < VIPS_NUMBER( vips_similarity_kernel ); i++ ) {
-			VipsInterpolateKernel *ik = &vips_similarity_kernel[i];
-
-			if( strcmp( nickname, ik->nickname ) == 0 ) {
-				if( vips_reduce( resample->in, &t[0], 
-					1.0 / similarity->scale, 
-					1.0 / similarity->scale, 
-					"kernel", ik->kernel,
-					NULL ) )
-					return( -1 );
-
-				handled = TRUE;
-				break;
-			}
-		}
-	}
-
-	if( !handled ) { 
-		double a = similarity->scale * 
-			cos( VIPS_RAD( similarity->angle ) ); 
-		double b = similarity->scale * 
-			-sin( VIPS_RAD( similarity->angle ) );
-		double c = -b;
-		double d = a;
-
-		if( vips_affine( resample->in, &t[0], a, b, c, d, 
-			"interpolate", similarity->interpolate,
-			"odx", similarity->odx,
-			"ody", similarity->ody,
-			"idx", similarity->idx,
-			"idy", similarity->idy,
-			NULL ) )
-			return( -1 );
-	}
+	if( vips_affine( resample->in, &t[0], a, b, c, d, 
+		"interpolate", base->interpolate,
+		"odx", base->odx,
+		"ody", base->ody,
+		"idx", base->idx,
+		"idy", base->idy,
+		"background", base->background,
+		NULL ) )
+		return( -1 );
 
 	if( vips_image_write( t[0], resample->out ) )
 		return( -1 ); 
 
 	return( 0 );
 }
+
+static void
+vips_similarity_base_class_init( VipsSimilarityBaseClass *class )
+{
+	GObjectClass *gobject_class = G_OBJECT_CLASS( class );
+	VipsObjectClass *vobject_class = VIPS_OBJECT_CLASS( class );
+
+	gobject_class->set_property = vips_object_set_property;
+	gobject_class->get_property = vips_object_get_property;
+
+	vobject_class->nickname = "similarity_base";
+	vobject_class->description = _( "base similarity transform" );
+	vobject_class->build = vips_similarity_base_build;
+
+	VIPS_ARG_INTERPOLATE( class, "interpolate", 5, 
+		_( "Interpolate" ), 
+		_( "Interpolate pixels with this" ),
+		VIPS_ARGUMENT_OPTIONAL_INPUT, 
+		G_STRUCT_OFFSET( VipsSimilarityBase, interpolate ) );
+
+	VIPS_ARG_BOXED( class, "background", 6, 
+		_( "Background" ), 
+		_( "Background value" ),
+		VIPS_ARGUMENT_OPTIONAL_INPUT,
+		G_STRUCT_OFFSET( VipsSimilarityBase, background ),
+		VIPS_TYPE_ARRAY_DOUBLE );
+
+	VIPS_ARG_DOUBLE( class, "odx", 112, 
+		_( "Output offset" ), 
+		_( "Horizontal output displacement" ),
+		VIPS_ARGUMENT_OPTIONAL_INPUT,
+		G_STRUCT_OFFSET( VipsSimilarityBase, odx ),
+		-10000000, 10000000, 0 );
+
+	VIPS_ARG_DOUBLE( class, "ody", 113, 
+		_( "Output offset" ), 
+		_( "Vertical output displacement" ),
+		VIPS_ARGUMENT_OPTIONAL_INPUT,
+		G_STRUCT_OFFSET( VipsSimilarityBase, ody ),
+		-10000000, 10000000, 0 );
+
+	VIPS_ARG_DOUBLE( class, "idx", 114, 
+		_( "Input offset" ), 
+		_( "Horizontal input displacement" ),
+		VIPS_ARGUMENT_OPTIONAL_INPUT,
+		G_STRUCT_OFFSET( VipsSimilarityBase, idx ),
+		-10000000, 10000000, 0 );
+
+	VIPS_ARG_DOUBLE( class, "idy", 115, 
+		_( "Input offset" ), 
+		_( "Vertical input displacement" ),
+		VIPS_ARGUMENT_OPTIONAL_INPUT,
+		G_STRUCT_OFFSET( VipsSimilarityBase, idy ),
+		-10000000, 10000000, 0 );
+
+}
+
+static void
+vips_similarity_base_init( VipsSimilarityBase *base )
+{
+	base->scale = 1; 
+	base->angle = 0; 
+	base->interpolate = NULL; 
+	base->odx = 0; 
+	base->ody = 0; 
+	base->idx = 0; 
+	base->idy = 0; 
+	base->background = vips_array_double_newv( 1, 0.0 );
+}
+
+typedef VipsSimilarityBase VipsSimilarity;
+typedef VipsSimilarityBaseClass VipsSimilarityClass;
+
+G_DEFINE_TYPE( VipsSimilarity, vips_similarity, 
+	vips_similarity_base_get_type() );
 
 static void
 vips_similarity_class_init( VipsSimilarityClass *class )
@@ -165,7 +197,6 @@ vips_similarity_class_init( VipsSimilarityClass *class )
 
 	vobject_class->nickname = "similarity";
 	vobject_class->description = _( "similarity transform of an image" );
-	vobject_class->build = vips_similarity_build;
 
 	VIPS_ARG_DOUBLE( class, "scale", 3, 
 		_( "Scale" ), 
@@ -181,57 +212,17 @@ vips_similarity_class_init( VipsSimilarityClass *class )
 		G_STRUCT_OFFSET( VipsSimilarity, angle ),
 		-10000000, 10000000, 0 );
 
-	VIPS_ARG_INTERPOLATE( class, "interpolate", 2, 
-		_( "Interpolate" ), 
-		_( "Interpolate pixels with this" ),
-		VIPS_ARGUMENT_OPTIONAL_INPUT, 
-		G_STRUCT_OFFSET( VipsSimilarity, interpolate ) );
-
-	VIPS_ARG_DOUBLE( class, "odx", 112, 
-		_( "Output offset" ), 
-		_( "Horizontal output displacement" ),
-		VIPS_ARGUMENT_OPTIONAL_INPUT,
-		G_STRUCT_OFFSET( VipsSimilarity, odx ),
-		-10000000, 10000000, 0 );
-
-	VIPS_ARG_DOUBLE( class, "ody", 113, 
-		_( "Output offset" ), 
-		_( "Vertical output displacement" ),
-		VIPS_ARGUMENT_OPTIONAL_INPUT,
-		G_STRUCT_OFFSET( VipsSimilarity, ody ),
-		-10000000, 10000000, 0 );
-
-	VIPS_ARG_DOUBLE( class, "idx", 114, 
-		_( "Input offset" ), 
-		_( "Horizontal input displacement" ),
-		VIPS_ARGUMENT_OPTIONAL_INPUT,
-		G_STRUCT_OFFSET( VipsSimilarity, idx ),
-		-10000000, 10000000, 0 );
-
-	VIPS_ARG_DOUBLE( class, "idy", 115, 
-		_( "Input offset" ), 
-		_( "Vertical input displacement" ),
-		VIPS_ARGUMENT_OPTIONAL_INPUT,
-		G_STRUCT_OFFSET( VipsSimilarity, idy ),
-		-10000000, 10000000, 0 );
 }
 
 static void
 vips_similarity_init( VipsSimilarity *similarity )
 {
-	similarity->scale = 1; 
-	similarity->angle = 0; 
-	similarity->interpolate = NULL; 
-	similarity->odx = 0; 
-	similarity->ody = 0; 
-	similarity->idx = 0; 
-	similarity->idy = 0; 
 }
 
 /**
- * vips_similarity:
+ * vips_similarity: (method)
  * @in: input image
- * @out: output image
+ * @out: (out): output image
  * @...: %NULL-terminated list of optional named arguments
  *
  * Optional arguments:
@@ -239,9 +230,11 @@ vips_similarity_init( VipsSimilarity *similarity )
  * * @scale: %gdouble, scale by this factor
  * * @angle: %gdouble, rotate by this many degrees clockwise
  * * @interpolate: #VipsInterpolate, interpolate pixels with this
+ * * @background: #VipsArrayDouble colour for new pixels 
  * * @idx: %gdouble, input horizontal offset
  * * @idy: %gdouble, input vertical offset
  * * @odx: %gdouble, output horizontal offset
+ * * @ody: %gdouble, output vertical offset
  * * @ody: %gdouble, output vertical offset
  *
  * This operator calls vips_affine() for you, calculating the matrix for the
@@ -260,6 +253,76 @@ vips_similarity( VipsImage *in, VipsImage **out, ... )
 
 	va_start( ap, out );
 	result = vips_call_split( "similarity", ap, in, out );
+	va_end( ap );
+
+	return( result );
+}
+
+typedef VipsSimilarityBase VipsRotate;
+typedef VipsSimilarityBaseClass VipsRotateClass;
+
+G_DEFINE_TYPE( VipsRotate, vips_rotate, vips_similarity_base_get_type() );
+
+static void
+vips_rotate_class_init( VipsRotateClass *class )
+{
+	GObjectClass *gobject_class = G_OBJECT_CLASS( class );
+	VipsObjectClass *vobject_class = VIPS_OBJECT_CLASS( class );
+
+	gobject_class->set_property = vips_object_set_property;
+	gobject_class->get_property = vips_object_get_property;
+
+	vobject_class->nickname = "rotate";
+	vobject_class->description = 
+		_( "rotate an image by a number of degrees" );
+
+	VIPS_ARG_DOUBLE( class, "angle", 4, 
+		_( "Angle" ), 
+		_( "Rotate anticlockwise by this many degrees" ),
+		VIPS_ARGUMENT_REQUIRED_INPUT,
+		G_STRUCT_OFFSET( VipsSimilarity, angle ),
+		-10000000, 10000000, 0 );
+
+}
+
+static void
+vips_rotate_init( VipsRotate *rotate )
+{
+}
+
+/**
+ * vips_rotate: (method)
+ * @in: input image
+ * @out: (out): output image
+ * @angle: %gdouble, rotate by this many degrees clockwise
+ * @...: %NULL-terminated list of optional named arguments
+ *
+ * Optional arguments:
+ *
+ * * @interpolate: #VipsInterpolate, interpolate pixels with this
+ * * @background: #VipsArrayDouble colour for new pixels 
+ * * @idx: %gdouble, input horizontal offset
+ * * @idy: %gdouble, input vertical offset
+ * * @odx: %gdouble, output horizontal offset
+ * * @ody: %gdouble, output vertical offset
+ * * @ody: %gdouble, output vertical offset
+ *
+ * This operator calls vips_affine() for you, calculating the matrix for the
+ * affine transform from @scale and @angle. Other parameters are passed on to
+ * vips_affine() unaltered. 
+ *
+ * See also: vips_affine(), #VipsInterpolate.
+ *
+ * Returns: 0 on success, -1 on error
+ */
+int
+vips_rotate( VipsImage *in, VipsImage **out, double angle, ... )
+{
+	va_list ap;
+	int result;
+
+	va_start( ap, angle );
+	result = vips_call_split( "rotate", ap, in, out, angle );
 	va_end( ap );
 
 	return( result );

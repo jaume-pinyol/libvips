@@ -6,6 +6,8 @@
  * 	- reorganise loops, 30% faster, vectorisable
  * 15/8/16
  * 	- rename xshrink -> hshrink for greater consistency 
+ * 6/8/19
+ * 	- use a double sum buffer for int32 types
  */
 
 /*
@@ -71,13 +73,13 @@ G_DEFINE_TYPE( VipsShrinkh, vips_shrinkh, VIPS_TYPE_RESAMPLE );
 
 /* Integer shrink. 
  */
-#define ISHRINK( TYPE, BANDS ) { \
+#define ISHRINK( ACC_TYPE, TYPE, BANDS ) { \
 	TYPE * restrict p = (TYPE *) in; \
 	TYPE * restrict q = (TYPE *) out; \
 	\
 	for( x = 0; x < width; x++ ) { \
 		for( b = 0; b < BANDS; b++ ) { \
-			int sum; \
+			ACC_TYPE sum; \
 			\
 			sum = 0; \
 			x1 = b; \
@@ -137,26 +139,26 @@ vips_shrinkh_gen2( VipsShrinkh *shrink, VipsRegion *or, VipsRegion *ir,
 		 */
 		switch( bands ) {
 		case 1:
-			ISHRINK( unsigned char, 1 ); break;
+			ISHRINK( int, unsigned char, 1 ); break;
 		case 3:
-			ISHRINK( unsigned char, 3 ); break;
+			ISHRINK( int, unsigned char, 3 ); break;
 		case 4:
-			ISHRINK( unsigned char, 4 ); break;
+			ISHRINK( int, unsigned char, 4 ); break;
 		default:
-			ISHRINK( unsigned char, bands ); break;
+			ISHRINK( int, unsigned char, bands ); break;
 		}
 		break;
 
 	case VIPS_FORMAT_CHAR: 	
-		ISHRINK( char, bands ); break; 
+		ISHRINK( int, char, bands ); break; 
 	case VIPS_FORMAT_USHORT: 
-		ISHRINK( unsigned short, bands ); break;
+		ISHRINK( int, unsigned short, bands ); break;
 	case VIPS_FORMAT_SHORT: 	
-		ISHRINK( short, bands ); break; 
+		ISHRINK( int, short, bands ); break; 
 	case VIPS_FORMAT_UINT: 	
-		ISHRINK( unsigned int, bands ); break; 
+		ISHRINK( double, unsigned int, bands ); break; 
 	case VIPS_FORMAT_INT: 	
-		ISHRINK( int, bands );  break; 
+		ISHRINK( double, int, bands );  break; 
 	case VIPS_FORMAT_FLOAT: 	
 		FSHRINK( float ); break; 
 	case VIPS_FORMAT_DOUBLE:	
@@ -250,12 +252,6 @@ vips_shrinkh_build( VipsObject *object )
 	if( shrink->hshrink == 1 ) 
 		return( vips_image_write( in, resample->out ) );
 
-	/* Unpack for processing.
-	 */
-	if( vips_image_decode( in, &t[0] ) )
-		return( -1 );
-	in = t[0];
-
 	/* We need new pixels at the right so that we don't have small chunks
 	 * to average down the right edge.
 	 */
@@ -342,9 +338,9 @@ vips_shrinkh_init( VipsShrinkh *shrink )
 }
 
 /**
- * vips_shrinkh:
+ * vips_shrinkh: (method)
  * @in: input image
- * @out: output image
+ * @out: (out): output image
  * @hshrink: horizontal shrink
  * @...: %NULL-terminated list of optional named arguments
  *

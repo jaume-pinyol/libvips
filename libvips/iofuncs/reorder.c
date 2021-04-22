@@ -313,9 +313,9 @@ vips__reorder_set_input( VipsImage *image, VipsImage **in )
 }
 
 /**
- * vips_reorder_prepare_many:
+ * vips_reorder_prepare_many: (method)
  * @image: the image that's being written
- * @regions: the set of regions to prepare
+ * @regions: (array) (element-type VipsRegion): the set of regions to prepare
  * @r: the #VipsRect to prepare on each region
  *
  * vips_reorder_prepare_many() runs vips_region_prepare() on each region in
@@ -338,7 +338,8 @@ vips_reorder_prepare_many( VipsImage *image, VipsRegion **regions, VipsRect *r )
 	for( i = 0; i < reorder->n_inputs; i++ ) { 
 		g_assert( regions[i] );
 
-		if( vips_region_prepare( regions[reorder->recomp_order[i]], r ) )
+		if( vips_region_prepare( 
+			regions[reorder->recomp_order[i]], r ) )
 			return( -1 );
 	}
 
@@ -346,7 +347,7 @@ vips_reorder_prepare_many( VipsImage *image, VipsRegion **regions, VipsRect *r )
 }
 
 /**
- * vips_reorder_margin_hint:
+ * vips_reorder_margin_hint: (method)
  * @image: the image to hint on
  * @margin: the size of the margin this operation has added
  *
@@ -369,6 +370,13 @@ vips_reorder_margin_hint( VipsImage *image, int margin )
 
 	for( i = 0; i < reorder->n_sources; i++ )  
 		reorder->cumulative_margin[i] += margin;
+}
+
+void
+vips__reorder_clear( VipsImage *image )
+{
+	g_object_set_qdata( G_OBJECT( image ), 
+		vips__image_reorder_quark, NULL );
 }
 
 void

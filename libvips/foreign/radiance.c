@@ -19,6 +19,16 @@
  *	- add buffer save functions   
  * 28/2/17
  * 	- use dbuf for buffer output
+ * 4/4/17
+ * 	- reduce stack use to help musl
+ * 22/7/18
+ * 	- update code from radiance ... pasted in from rad5R1
+ * 	- expand fs[] buffer to prevent out of bounds write [HongxuChen]
+ * 23/7/18
+ * 	- fix a buffer overflow for incorrectly coded old-style RLE
+ * 	  [HongxuChen]
+ * 6/11/19
+ * 	- revise for VipsConnection
  */
 
 /*
@@ -148,42 +158,23 @@
 #include "pforeign.h"
 
 /* Begin copy-paste from Radiance sources.
+ *
+ * To update:
+ *
+ * 1. Download and unpack latest stable radiance
+ * 2. ray/src/common has the files we need ... copy in this order:
+ * 	colour.h
+ * 	resolu.h
+ * 	rtio.h
+ * 	fputword.c
+ * 	colour.c
+ * 	resolu.c
+ * 	header.c
+ * 3. trim each one down, removing extern decls
+ * 4. make all functions static
+ * 5. reorder to remove forward refs
+ * 6. remove unused funcs, mostly related to HDR write
  */
-
-			/* flags for scanline ordering */
-#define  XDECR			1
-#define  YDECR			2
-#define  YMAJOR			4
-
-			/* standard scanline ordering */
-#define  PIXSTANDARD		(YMAJOR|YDECR)
-#define  PIXSTDFMT		"-Y %d +X %d\n"
-
-			/* structure for image dimensions */
-typedef struct {
-	int	rt;		/* orientation (from flags above) */
-	int	xr, yr;		/* x and y resolution */
-} RESOLU;
-
-			/* macros to get scanline length and number */
-#define  scanlen(rs)		((rs)->rt & YMAJOR ? (rs)->xr : (rs)->yr)
-#define  numscans(rs)		((rs)->rt & YMAJOR ? (rs)->yr : (rs)->xr)
-
-			/* resolution string buffer and its size */
-#define  RESOLU_BUFLEN		32
-
-			/* macros for reading/writing resolution struct */
-#define  fputsresolu(rs,fp)	fputs(resolu2str(resolu_buf,rs),fp)
-#define  fgetsresolu(rs,fp)	str2resolu(rs, \
-					fgets(resolu_buf,RESOLU_BUFLEN,fp))
-
-			/* reading/writing of standard ordering */
-#define  fprtresolu(sl,ns,fp)	fprintf(fp,PIXSTDFMT,ns,sl)
-#define  fscnresolu(sl,ns,fp)	(fscanf(fp,PIXSTDFMT,ns,sl)==2)
-
-					/* defined in resolu.c */
-typedef int gethfunc(char *s, void *p); /* callback to process header lines */
-
 
 #define  RED		0
 #define  GRN		1
@@ -195,10 +186,10 @@ typedef int gethfunc(char *s, void *p); /* callback to process header lines */
 #define  COLXS		128	/* excess used for exponent */
 #define  WHT		3	/* used for RGBPRIMS type */
 
-#undef  BYTE
-#define  BYTE 	unsigned char	/* 8-bit unsigned integer */
+#undef uby8
+#define uby8  unsigned char	/* 8-bit unsigned integer */
 
-typedef BYTE  COLR[4];		/* red, green, blue (or X,Y,Z), exponent */
+typedef uby8  COLR[4];		/* red, green, blue (or X,Y,Z), exponent */
 
 typedef float COLORV;
 typedef COLORV  COLOR[3];	/* red, green, blue (or X,Y,Z) */
@@ -230,8 +221,8 @@ typedef float  COLORMAT[3][3];	/* color coordinate conversion matrix */
 #define  CIE_y_g		0.710
 #define  CIE_x_b		0.140
 #define  CIE_y_b		0.080
-#define  CIE_x_w		0.3333		/* use true white */
-#define  CIE_y_w		0.3333
+#define  CIE_x_w		(1./3.)		/* use true white */
+#define  CIE_y_w		(1./3.)
 #else
 #define  CIE_x_r		0.640		/* nominal CRT primaries */
 #define  CIE_y_r		0.330
@@ -239,8 +230,8 @@ typedef float  COLORMAT[3][3];	/* color coordinate conversion matrix */
 #define  CIE_y_g		0.600
 #define  CIE_x_b		0.150
 #define  CIE_y_b		0.060
-#define  CIE_x_w		0.3333		/* use true white */
-#define  CIE_y_w		0.3333
+#define  CIE_x_w		(1./3.)		/* use true white */
+#define  CIE_y_w		(1./3.)
 #endif
 
 #define  STDPRIMS	{{CIE_x_r,CIE_y_r},{CIE_x_g,CIE_y_g}, \
@@ -325,12 +316,12 @@ typedef float  COLORMAT[3][3];	/* color coordinate conversion matrix */
 #define  PRIMARYSTR		"PRIMARIES="
 #define  LPRIMARYSTR		10
 #define  isprims(hl)		(!strncmp(hl,PRIMARYSTR,LPRIMARYSTR))
-#define  primsval(p,hl)		sscanf(hl+LPRIMARYSTR, \
+#define  primsval(p,hl)		(sscanf((hl)+LPRIMARYSTR, \
 					"%f %f %f %f %f %f %f %f", \
 					&(p)[RED][CIEX],&(p)[RED][CIEY], \
 					&(p)[GRN][CIEX],&(p)[GRN][CIEY], \
 					&(p)[BLU][CIEX],&(p)[BLU][CIEY], \
-					&(p)[WHT][CIEX],&(p)[WHT][CIEY])
+					&(p)[WHT][CIEX],&(p)[WHT][CIEY]) == 8)
 #define  fputprims(p,fp)	fprintf(fp, \
 				"%s %.4f %.4f %.4f %.4f %.4f %.4f %.4f %.4f\n",\
 					PRIMARYSTR, \
@@ -343,10 +334,21 @@ typedef float  COLORMAT[3][3];	/* color coordinate conversion matrix */
 #define  COLCORSTR		"COLORCORR="
 #define  LCOLCORSTR		10
 #define  iscolcor(hl)		(!strncmp(hl,COLCORSTR,LCOLCORSTR))
-#define  colcorval(cc,hl)	sscanf(hl+LCOLCORSTR,"%f %f %f", \
+#define  colcorval(cc,hl)	sscanf((hl)+LCOLCORSTR,"%f %f %f", \
 					&(cc)[RED],&(cc)[GRN],&(cc)[BLU])
 #define  fputcolcor(cc,fp)	fprintf(fp,"%s %f %f %f\n",COLCORSTR, \
 					(cc)[RED],(cc)[GRN],(cc)[BLU])
+
+/*
+ * Conversions to and from XYZ space generally don't apply WHTEFFICACY.
+ * If you need Y to be luminance (cd/m^2), this must be applied when
+ * converting from radiance (watts/sr/m^2).
+ */
+
+extern RGBPRIMS  stdprims;	/* standard primary chromaticities */
+extern COLORMAT  rgb2xyzmat;	/* RGB to XYZ conversion matrix */
+extern COLORMAT  xyz2rgbmat;	/* XYZ to RGB conversion matrix */
+extern COLOR  cblack, cwhite;	/* black (0,0,0) and white (1,1,1) */
 
 #define  CGAMUT_LOWER		01
 #define  CGAMUT_UPPER		02
@@ -356,206 +358,94 @@ typedef float  COLORMAT[3][3];	/* color coordinate conversion matrix */
 
 #define  cpcolormat(md,ms)	memcpy((void *)md,(void *)ms,sizeof(COLORMAT))
 
-
-
-
-#define	 MAXLINE	512
-
-char  HDRSTR[] = "#?";		/* information header magic number */
-
-char  FMTSTR[] = "FORMAT=";	/* format identifier */
-
-char  TMSTR[] = "CAPDATE=";	/* capture date identifier */
-
-static gethfunc mycheck;
-
-
-
-static int
-formatval(			/* get format value (return true if format) */
-	register char  *r,
-	register char  *s
-)
-{
-	register char  *cp = FMTSTR;
-
-	while (*cp) if (*cp++ != *s++) return(0);
-	while (isspace(*s)) s++;
-	if (!*s) return(0);
-	if (r == NULL) return(1);
-	do
-		*r++ = *s++;
-	while(*s && !isspace(*s));
-	*r = '\0';
-	return(1);
-}
-
-
-static int
-isformat(			/* is line a format line? */
-	char  *s
-)
-{
-	return(formatval(NULL, s));
-}
-
-
-
-static int
-getheader(		/* get header from file */
-	FILE  *fp,
-	gethfunc *f,
-	void  *p
-)
-{
-	char  buf[MAXLINE];
-	int n;
-
-	/* give up if there are more than 1,000 lines of header, prevents 
-	 * us scanning entire files when testing for israd */
-	for (n = 0; n < 1000; n++) {
-		buf[MAXLINE-2] = '\n';
-		if (fgets(buf, MAXLINE, fp) == NULL)
-			return(-1);
-		if (buf[0] == '\n')
-			return(0);
-#ifdef MSDOS
-		if (buf[0] == '\r' && buf[1] == '\n')
-			return(0);
+#ifdef getc_unlocked		/* avoid horrendous overhead of flockfile */
+#undef getc
+#undef putc
+#define getc    getc_unlocked
+#define putc    putc_unlocked
 #endif
-		if (buf[MAXLINE-2] != '\n') {
-			ungetc(buf[MAXLINE-2], fp);	/* prevent false end */
-			buf[MAXLINE-2] = '\0';
-		}
-		if (f != NULL && (*f)(buf, p) < 0)
-			return(-1);
-	}
 
-	return(0);
-}
+#define  MINELEN	8	/* minimum scanline length for encoding */
+#define  MAXELEN	0x7fff	/* maximum scanline length for encoding */
+#define  MINRUN		4	/* minimum run length */
 
+			/* flags for scanline ordering */
+#define  XDECR			1
+#define  YDECR			2
+#define  YMAJOR			4
 
-struct check {
-	FILE	*fp;
-	char	fs[64];
-};
+			/* standard scanline ordering */
+#define  PIXSTANDARD		(YMAJOR|YDECR)
+#define  PIXSTDFMT		"-Y %d +X %d\n"
 
+			/* structure for image dimensions */
+typedef struct {
+	int	rt;		/* orientation (from flags above) */
+	int	xr, yr;		/* x and y resolution */
+} RESOLU;
 
-static int
-mycheck(			/* check a header line for format info. */
-	char  *s,
-	void  *cp
-)
-{
-	if (!formatval(((struct check*)cp)->fs, s)
-			&& ((struct check*)cp)->fp != NULL) {
-		fputs(s, ((struct check*)cp)->fp);
-	}
-	return(0);
-}
+			/* macros to get scanline length and number */
+#define  scanlen(rs)		((rs)->rt & YMAJOR ? (rs)->xr : (rs)->yr)
+#define  numscans(rs)		((rs)->rt & YMAJOR ? (rs)->yr : (rs)->xr)
 
+			/* resolution string buffer and its size */
+#define  RESOLU_BUFLEN		32
 
-static int
-globmatch(			/* check for match of s against pattern p */
-	register char	*p,
-	register char	*s
-)
-{
-	int	setmatch;
+			/* macros for reading/writing resolution struct */
+#define  fputsresolu(rs,fp)	fputs(resolu2str(resolu_buf,rs),fp)
+#define  fgetsresolu(rs,fp)	str2resolu(rs, \
+					fgets(resolu_buf,RESOLU_BUFLEN,fp))
 
-	do {
-		switch (*p) {
-		case '?':			/* match any character */
-			if (!*s++)
-				return(0);
-			break;
-		case '*':			/* match any string */
-			while (p[1] == '*') p++;
-			do
-				if ( (p[1]=='?' || p[1]==*s) &&
-						globmatch(p+1,s) )
-					return(1);
-			while (*s++);
-			return(0);
-		case '[':			/* character set */
-			setmatch = *s == *++p;
-			if (!*p)
-				return(0);
-			while (*++p != ']') {
-				if (!*p)
-					return(0);
-				if (*p == '-') {
-					setmatch += p[-1] <= *s && *s <= p[1];
-					if (!*++p)
-						break;
-				} else
-					setmatch += *p == *s;
-			}
-			if (!setmatch)
-				return(0);
-			s++;
-			break;
-		case '\\':			/* literal next */
-			p++;
-		/* fall through */
-		default:			/* normal character */
-			if (*p != *s)
-				return(0);
-			s++;
-			break;
-		}
-	} while (*p++);
-	return(1);
-}
+			/* reading/writing of standard ordering */
+#define  fprtresolu(sl,ns,fp)	fprintf(fp,PIXSTDFMT,ns,sl)
+#define  fscnresolu(sl,ns,fp)	(fscanf(fp,PIXSTDFMT,ns,sl)==2)
 
+			/* identify header lines */
+#define  isheadid(s)	headidval(NULL,s)
+#define  isformat(s)	formatval(NULL,s)
+#define  isdate(s)	dateval(NULL,s)
+#define  isgmt(s)	gmtval(NULL,s)
 
-/*
- * Checkheader(fin,fmt,fout) returns a value of 1 if the input format
- * matches the specification in fmt, 0 if no input format was found,
- * and -1 if the input format does not match or there is an
- * error reading the header.  If fmt is empty, then -1 is returned
- * if any input format is found (or there is an error), and 0 otherwise.
- * If fmt contains any '*' or '?' characters, then checkheader
- * does wildcard expansion and copies a matching result into fmt.
- * Be sure that fmt is big enough to hold the match in such cases,
- * and that it is not a static, read-only string!
- * The input header (minus any format lines) is copied to fout
- * if fout is not NULL.
- */
+#define  LATLONSTR	"LATLONG="
+#define  LLATLONSTR	8
+#define  islatlon(hl)		(!strncmp(hl,LATLONSTR,LLATLONSTR))
+#define  latlonval(ll,hl)	sscanf((hl)+LLATLONSTR, "%f %f", \
+						&(ll)[0],&(ll)[1])
+#define  fputlatlon(lat,lon,fp)	fprintf(fp,"%s %.6f %.6f\n",LATLONSTR,lat,lon)
 
-static int
-checkheader(
-	FILE  *fin,
-	char  *fmt,
-	FILE  *fout
-)
-{
-	struct check	cdat;
-	register char	*cp;
+typedef int gethfunc(char *s, void *p); /* callback to process header lines */
 
-	cdat.fp = fout;
-	cdat.fs[0] = '\0';
-	if (getheader(fin, mycheck, &cdat) < 0)
-		return(-1);
-	if (!cdat.fs[0])
-		return(0);
-	for (cp = fmt; *cp; cp++)		/* check for globbing */
-		if ((*cp == '?') | (*cp == '*')) {
-			if (globmatch(fmt, cdat.fs)) {
-				strcpy(fmt, cdat.fs);
-				return(1);
-			} else
-				return(-1);
-		}
-	return(strcmp(fmt, cdat.fs) ? -1 : 1);	/* literal match */
-}
+#ifdef getc_unlocked		/* avoid horrendous overhead of flockfile */
+#undef getc
+#undef putc
+#define getc    getc_unlocked
+#define putc    putc_unlocked
+#endif
 
 
 static char  resolu_buf[RESOLU_BUFLEN];	/* resolution line buffer */
 
+static char *
+resolu2str(buf, rp)		/* convert resolution struct to line */
+char  *buf;
+register RESOLU  *rp;
+{
+	if (rp->rt&YMAJOR)
+		sprintf(buf, "%cY %d %cX %d\n",
+				rp->rt&YDECR ? '-' : '+', rp->yr,
+				rp->rt&XDECR ? '-' : '+', rp->xr);
+	else
+		sprintf(buf, "%cX %d %cY %d\n",
+				rp->rt&XDECR ? '-' : '+', rp->xr,
+				rp->rt&YDECR ? '-' : '+', rp->yr);
+	return(buf);
+}
+
 
 static int
-str2resolu(RESOLU *rp, char *buf)		/* convert resolution line to struct */
+str2resolu(rp, buf)		/* convert resolution line to struct */
+register RESOLU  *rp;
+char  *buf;
 {
 	register char  *xndx, *yndx;
 	register char  *cp;
@@ -581,154 +471,94 @@ str2resolu(RESOLU *rp, char *buf)		/* convert resolution line to struct */
 	return(1);
 }
 
+#define	 MAXLINE	2048
+#define	 MAXFMTLEN	2048
 
-#ifdef getc_unlocked		/* avoid horrendous overhead of flockfile */
-#undef getc
-#undef putc
-#define getc    getc_unlocked
-#define putc    putc_unlocked
-#endif
+static const char  FMTSTR[] = "FORMAT=";	/* format identifier */
 
-#define  MINELEN	8	/* minimum scanline length for encoding */
-#define  MAXELEN	0x7fff	/* maximum scanline length for encoding */
-#define  MINRUN		4	/* minimum run length */
 
-static void
-fputformat(		/* put out a format value */
-	char  *s,
-	FILE  *fp
+static int
+formatval(			/* get format value (return true if format) */
+	char fmt[MAXFMTLEN],
+	const char  *s
 )
 {
-	fputs(FMTSTR, fp);
-	fputs(s, fp);
-	putc('\n', fp);
+	const char  *cp = FMTSTR;
+	char  *r = fmt;
+
+	while (*cp) if (*cp++ != *s++) return(0);
+	while (isspace(*s)) s++;
+	if (!*s) return(0);
+	if (r == NULL) return(1);
+	do
+		*r++ = *s++;
+	while (*s && !isspace(*s) && r-fmt < MAXFMTLEN-1);
+	*r = '\0';
+	return(1);
 }
 
-char *
-resolu2str(char *buf, RESOLU *rp)		/* convert resolution struct to line */
-{
-	if (rp->rt&YMAJOR)
-		sprintf(buf, "%cY %d %cX %d\n",
-				rp->rt&YDECR ? '-' : '+', rp->yr,
-				rp->rt&XDECR ? '-' : '+', rp->xr);
-	else
-		sprintf(buf, "%cX %d %cY %d\n",
-				rp->rt&XDECR ? '-' : '+', rp->xr,
-				rp->rt&YDECR ? '-' : '+', rp->yr);
-	return(buf);
-}
 
-/* End copy-paste from Radiance sources.
- */
-
-#define BUFFER_SIZE (4096)
-#define BUFFER_MARGIN (256)
-
-/* Read from a FILE with a rolling memory buffer ... this lets us reduce the
- * number of fgetc() and gives us some very quick readahead.
- */
-
-typedef struct _Buffer { 
-	unsigned char text[BUFFER_SIZE + BUFFER_MARGIN];
-	int length;
-	int position;
-	FILE *fp;
-} Buffer; 
-
-static Buffer *
-buffer_new( FILE *fp )
-{
-	Buffer *buffer = g_new0( Buffer, 1 );
-
-	buffer->length = 0;
-	buffer->position = 0;
-	buffer->fp = fp;
-
-	return( buffer ); 
-}
-
-static void
-buffer_free( Buffer *buffer )
-{
-	g_free( buffer ); 
-}
-
-/* Make sure there are at least @require bytes of readahead available.
- */
 static int
-buffer_need( Buffer *buffer, int require )
+getheader(		/* get header from file */
+	VipsSbuf *sbuf,
+	gethfunc *f,
+	void  *p
+)
 {
-	int remaining;
+	for(;;) { 
+		const char *line;
 
-	g_assert( require < BUFFER_MARGIN ); 
-	g_assert( buffer->length >= 0 ); 
-	g_assert( buffer->position >= 0 ); 
-	g_assert( buffer->position <= buffer->length ); 
-
-	remaining = buffer->length - buffer->position;
-	if( remaining < require ) {
-		size_t len;
-
-		/* Areas can overlap.
-		 */
-		memmove( buffer->text, 
-			buffer->text + buffer->position, remaining ); 
-		buffer->position = 0;
-		buffer->length = remaining;
-
-		g_assert( buffer->length < BUFFER_MARGIN ); 
-
-		len = fread( buffer->text + buffer->length, 
-			1, BUFFER_SIZE, buffer->fp );
-		buffer->length += len;
-		remaining = buffer->length - buffer->position;
-
-		if( remaining < require ) {
-			vips_error( "rad2vips", "%s", _( "end of file" ) ); 
+		if( !(line = vips_sbuf_get_line( sbuf )) )
 			return( -1 );
-		}
+		if( strcmp( line, "" ) == 0 )
+			/* Blank line. We've parsed the header successfully.
+			 */
+			break;
+
+		if( f != NULL && 
+			(*f)( (char *) line, p ) < 0 )
+			return( -1 );
 	}
 
 	return( 0 );
 }
 
-#define BUFFER_FETCH(B) ((B)->text[(B)->position++])
-#define BUFFER_PEEK(B) ((B)->text[(B)->position])
-
-/* Read a single scanlne, encoded in the old style.
+/* Read a single scanline, encoded in the old style.
  */
 static int
-scanline_read_old( Buffer *buffer, COLR *scanline, int width )
+scanline_read_old( VipsSbuf *sbuf, COLR *scanline, int width )
 {
 	int rshift;
-
-	g_assert( buffer->length >= 0 ); 
-	g_assert( buffer->position >= 0 ); 
-	g_assert( buffer->position <= buffer->length ); 
 
 	rshift = 0;
 	
 	while( width > 0 ) {
-		if( buffer_need( buffer, 4 ) )
+		if( VIPS_SBUF_REQUIRE( sbuf, 4 ) )
 			return( -1 ); 
 
-		scanline[0][RED] = BUFFER_FETCH( buffer );
-		scanline[0][GRN] = BUFFER_FETCH( buffer );
-		scanline[0][BLU] = BUFFER_FETCH( buffer );
-		scanline[0][EXP] = BUFFER_FETCH( buffer );
+		scanline[0][RED] = VIPS_SBUF_FETCH( sbuf );
+		scanline[0][GRN] = VIPS_SBUF_FETCH( sbuf );
+		scanline[0][BLU] = VIPS_SBUF_FETCH( sbuf );
+		scanline[0][EXP] = VIPS_SBUF_FETCH( sbuf );
 
 		if( scanline[0][RED] == 1 &&
 			scanline[0][GRN] == 1 &&
 			scanline[0][BLU] == 1 ) {
-			int i;
+			guint i;
 
-			for( i = scanline[0][EXP] << rshift; i > 0; i-- ) {
+			for( i = ((guint32) scanline[0][EXP] << rshift); 
+				i > 0 && width > 0; i-- ) {
 				copycolr( scanline[0], scanline[-1] );
 				scanline += 1;
 				width -= 1;
 			}
 
 			rshift += 8;
+
+			/* This can happen with badly-formed input files.
+			 */
+			if( rshift > 24 )
+				return( -1 );
 		} 
 		else {
 			scanline += 1;
@@ -743,33 +573,30 @@ scanline_read_old( Buffer *buffer, COLR *scanline, int width )
 /* Read a single encoded scanline.
  */
 static int
-scanline_read( Buffer *buffer, COLR *scanline, int width )
+scanline_read( VipsSbuf *sbuf, COLR *scanline, int width )
 {
 	int i, j;
-
-	g_assert( buffer->length >= 0 ); 
-	g_assert( buffer->position >= 0 ); 
-	g_assert( buffer->position <= buffer->length ); 
 
 	/* Detect old-style scanlines.
 	 */
 	if( width < MINELEN ||
 		width > MAXELEN )
-		return( scanline_read_old( buffer, scanline, width ) );
+		return( scanline_read_old( sbuf, scanline, width ) );
 
-	if( buffer_need( buffer, 4 ) )
+	if( VIPS_SBUF_REQUIRE( sbuf, 4 ) )
 		return( -1 ); 
 
-	if( BUFFER_PEEK( buffer ) != 2 ) 
-		return( scanline_read_old( buffer, scanline, width ) );
+	if( VIPS_SBUF_PEEK( sbuf )[0] != 2 ) 
+		return( scanline_read_old( sbuf, scanline, width ) );
 
-	scanline[0][RED] = BUFFER_FETCH( buffer );
-	scanline[0][GRN] = BUFFER_FETCH( buffer );
-	scanline[0][BLU] = BUFFER_FETCH( buffer );
-	scanline[0][EXP] = BUFFER_FETCH( buffer );
+	scanline[0][RED] = VIPS_SBUF_FETCH( sbuf );
+	scanline[0][GRN] = VIPS_SBUF_FETCH( sbuf );
+	scanline[0][BLU] = VIPS_SBUF_FETCH( sbuf );
+	scanline[0][EXP] = VIPS_SBUF_FETCH( sbuf );
 	if( scanline[0][GRN] != 2 || 
 		scanline[0][BLU] & 128 ) 
-		return( scanline_read_old( buffer, scanline + 1, width - 1 ) );
+		return( scanline_read_old( sbuf, 
+			scanline + 1, width - 1 ) );
 
 	if( ((scanline[0][BLU] << 8) | scanline[0][EXP]) != width ) {
 		vips_error( "rad2vips", "%s", _( "scanline length mismatch" ) );
@@ -781,10 +608,10 @@ scanline_read( Buffer *buffer, COLR *scanline, int width )
 			int code, len;
 			gboolean run;
 
-			if( buffer_need( buffer, 2 ) )
+			if( VIPS_SBUF_REQUIRE( sbuf, 2 ) )
 				return( -1 ); 
 
-			code = BUFFER_FETCH( buffer ); 
+			code = VIPS_SBUF_FETCH( sbuf ); 
 			run = code > 128;
 			len = run ? code & 127 : code; 
 
@@ -796,16 +623,16 @@ scanline_read( Buffer *buffer, COLR *scanline, int width )
 			if( run ) { 
 				int val;
 
-				val = BUFFER_FETCH( buffer ); 
+				val = VIPS_SBUF_FETCH( sbuf ); 
 				while( len-- )
 					scanline[j++][i] = val;
 			} 
 			else {
-				if( buffer_need( buffer, len ) )
+				if( VIPS_SBUF_REQUIRE( sbuf, len ) )
 					return( -1 ); 
 				while( len-- ) 
 					scanline[j++][i] = 
-						BUFFER_FETCH( buffer );
+						VIPS_SBUF_FETCH( sbuf );
 			}
 		}
 
@@ -885,84 +712,64 @@ rle_scanline_write( COLR *scanline, int width,
 	}
 }
 
-/* Write a single scanline.
- */
-static int
-scanline_write( COLR *scanline, int width, FILE *fp )
-{
-	if( width < MINELEN || 
-		width > MAXELEN )
-		/* Write as a flat scanline.
-		 */
-		return( fwrite( scanline, sizeof( COLR ), width, fp ) - width );
-	else {
-		/* An RLE scanline.
-		 */
-		unsigned char buffer[MAX_LINE];
-		int length;
-
-		rle_scanline_write( scanline, width, buffer, &length );
-
-		return( fwrite( buffer, 1, length, fp ) - length );
-	}
-}
-
 /* What we track during radiance file read.
  */
 typedef struct {
-	char *filename;
+	VipsSbuf *sbuf;
 	VipsImage *out;
 
-	FILE *fin;
 	char format[256];
 	double expos;
 	COLOR colcor;
 	double aspect;
 	RGBPRIMS prims;
 	RESOLU rs;
-	Buffer *buffer; 
 } Read;
 
 int
-vips__rad_israd( const char *filename )
+vips__rad_israd( VipsSource *source )
 {
-	FILE *fin;
-	char format[256];
+	VipsSbuf *sbuf;
+	const char *line;
 	int result;
 
-#ifdef DEBUG
-	printf( "israd: \"%s\"\n", filename );
-#endif /*DEBUG*/
+	/* Just test that the first line is the magic string.
+	 */
+	sbuf = vips_sbuf_new_from_source( source );
+	result = (line = vips_sbuf_get_line( sbuf )) &&
+		strcmp( line, "#?RADIANCE" ) == 0;
+	VIPS_UNREF( sbuf );
 
-        if( !(fin = vips__file_open_read( filename, NULL, FALSE )) ) 
-		return( 0 );
-	strcpy( format, PICFMT );
-	result = checkheader( fin, format, NULL );
-	fclose( fin );
-
-	return( result == 1 );
+	return( result );
 }
 
 static void
-read_destroy( VipsObject *object, Read *read )
+read_destroy( VipsImage *image, Read *read )
 {
-	VIPS_FREE( read->filename );
-	VIPS_FREEF( fclose, read->fin );
-	VIPS_FREEF( buffer_free, read->buffer );
+	VIPS_UNREF( read->sbuf );
+}
+
+static void
+read_minimise_cb( VipsImage *image, Read *read )
+{
+	if( read->sbuf )
+		vips_source_minimise( read->sbuf->source );
 }
 
 static Read *
-read_new( const char *filename, VipsImage *out )
+read_new( VipsSource *source, VipsImage *out )
 {
 	Read *read;
 	int i;
 
+	if( vips_source_rewind( source ) )
+		return( NULL );
+
 	if( !(read = VIPS_NEW( out, Read )) )
 		return( NULL );
 
-	read->filename = vips_strdup( NULL, filename );
+	read->sbuf = vips_sbuf_new_from_source( source );
 	read->out = out;
-	read->fin = NULL;
 	strcpy( read->format, COLRFMT );
 	read->expos = 1.0;
 	for( i = 0; i < 3; i++ )
@@ -979,10 +786,8 @@ read_new( const char *filename, VipsImage *out )
 
 	g_signal_connect( out, "close", 
 		G_CALLBACK( read_destroy ), read );
-
-	if( !(read->fin = vips__file_open_read( filename, NULL, FALSE )) || 
-		!(read->buffer = buffer_new( read->fin )) )
-		return( NULL );
+	g_signal_connect( out, "minimise",
+		G_CALLBACK( read_minimise_cb ), read ); 
 
 	return( read );
 }
@@ -1032,12 +837,15 @@ static int
 rad2vips_get_header( Read *read, VipsImage *out )
 {
 	VipsInterpretation interpretation;
+	const char *line;
 	int width;
 	int height;
 	int i, j;
 
-	if( getheader( read->fin, (gethfunc *) rad2vips_process_line, read ) ||
-		!fgetsresolu( &read->rs, read->fin ) ) {
+	if( getheader( read->sbuf, 
+		(gethfunc *) rad2vips_process_line, read ) ||
+		!(line = vips_sbuf_get_line( read->sbuf )) ||
+		!str2resolu( &read->rs, (char *) line ) ) {
 		vips_error( "rad2vips", "%s", 
 			_( "error reading radiance header" ) );
 		return( -1 );
@@ -1065,6 +873,10 @@ rad2vips_get_header( Read *read, VipsImage *out )
 		interpretation,
 		1, read->aspect );
 
+	VIPS_SETSTR( out->filename, 
+		vips_connection_filename( 
+			VIPS_CONNECTION( read->sbuf->source ) ) );
+
 	vips_image_pipelinev( out, VIPS_DEMAND_STYLE_THINSTRIP, NULL );
 
 	vips_image_set_string( out, "rad-format", read->format );
@@ -1082,26 +894,19 @@ rad2vips_get_header( Read *read, VipsImage *out )
 			vips_image_set_double( out, 
 				prims_name[i][j], read->prims[i][j] );
 
-	/* Tell downstream we are reading sequentially.
-	 */
-	vips_image_set_area( out, VIPS_META_SEQUENTIAL, NULL, NULL ); 
-
 	return( 0 );
 }
 
 int
-vips__rad_header( const char *filename, VipsImage *out )
+vips__rad_header( VipsSource *source, VipsImage *out )
 {
 	Read *read;
 
-#ifdef DEBUG
-	printf( "rad2vips_header: reading \"%s\"\n", filename );
-#endif /*DEBUG*/
-
-	if( !(read = read_new( filename, out )) ) 
+	if( !(read = read_new( source, out )) ) 
 		return( -1 );
 	if( rad2vips_get_header( read, read->out ) ) 
 		return( -1 );
+	vips_source_minimise( source );
 
 	return( 0 );
 }
@@ -1126,7 +931,7 @@ rad2vips_generate( VipsRegion *or,
 		COLR *buf = (COLR *) 
 			VIPS_REGION_ADDR( or, 0, r->top + y );
 
-		if( scanline_read( read->buffer, buf, or->im->Xsize ) ) {
+		if( scanline_read( read->sbuf, buf, or->im->Xsize ) ) {
 			vips_error( "rad2vips", 
 				_( "read error line %d" ), r->top + y );
 			VIPS_GATE_STOP( "rad2vips_generate: work" );
@@ -1140,7 +945,7 @@ rad2vips_generate( VipsRegion *or,
 }
 
 int
-vips__rad_load( const char *filename, VipsImage *out )
+vips__rad_load( VipsSource *source, VipsImage *out )
 {
 	VipsImage **t = (VipsImage **) 
 		vips_object_local_array( VIPS_OBJECT( out ), 3 );
@@ -1148,10 +953,11 @@ vips__rad_load( const char *filename, VipsImage *out )
 	Read *read;
 
 #ifdef DEBUG
-	printf( "rad2vips: reading \"%s\"\n", filename );
+	printf( "rad2vips: reading \"%s\"\n", 
+		vips_connection_nick( VIPS_CONNECTION( source ) ) );
 #endif /*DEBUG*/
 
-	if( !(read = read_new( filename, out )) ) 
+	if( !(read = read_new( source, out )) ) 
 		return( -1 );
 
 	t[0] = vips_image_new();
@@ -1160,8 +966,13 @@ vips__rad_load( const char *filename, VipsImage *out )
 
 	if( vips_image_generate( t[0], 
 		NULL, rad2vips_generate, NULL, read, NULL ) ||
-		vips_sequential( t[0], &t[1], "tile_height", 8, NULL ) ||
+		vips_sequential( t[0], &t[1], 
+			"tile_height", VIPS__FATSTRIP_HEIGHT, 
+			NULL ) ||
 		vips_image_write( t[1], out ) )
+		return( -1 );
+
+	if( vips_source_decode( source ) )
 		return( -1 );
 
 	return( 0 );
@@ -1171,11 +982,7 @@ vips__rad_load( const char *filename, VipsImage *out )
  */
 typedef struct {
 	VipsImage *in;
-
-	char *filename;
-	FILE *fout;
-
-	VipsDbuf dbuf; 
+	VipsTarget *target;
 
 	char format[256];
 	double expos;
@@ -1183,20 +990,20 @@ typedef struct {
 	double aspect;
 	RGBPRIMS prims;
 	RESOLU rs;
+	unsigned char *line;
 } Write;
 
 static void
 write_destroy( Write *write )
 {
-	VIPS_FREE( write->filename );
-	VIPS_FREEF( fclose, write->fout );
-	vips_dbuf_destroy( &write->dbuf );
+	VIPS_FREE( write->line );
+	VIPS_UNREF( write->target );
 
-	vips_free( write );
+	g_free( write );
 }
 
 static Write *
-write_new( VipsImage *in )
+write_new( VipsImage *in, VipsTarget *target )
 {
 	Write *write;
 	int i;
@@ -1205,11 +1012,8 @@ write_new( VipsImage *in )
 		return( NULL );
 
 	write->in = in;
-
-	write->filename = NULL;
-	write->fout = NULL;
-
-	vips_dbuf_init( &write->dbuf ); 
+	write->target = target;
+	g_object_ref( target );
 
 	strcpy( write->format, COLRFMT );
 	write->expos = 1.0;
@@ -1225,6 +1029,11 @@ write_new( VipsImage *in )
 	write->prims[3][0] = CIE_x_w;
 	write->prims[3][1] = CIE_y_w;
 
+	if( !(write->line = VIPS_ARRAY( NULL, MAX_LINE, unsigned char )) ) {
+		write_destroy( write );
+		return( NULL );
+	}
+
 	return( write );
 }
 
@@ -1239,7 +1048,8 @@ vips2rad_make_header( Write *write )
 		vips_image_get_double( write->in, "rad-expos", &write->expos );
 
 	if( vips_image_get_typeof( write->in, "rad-aspect" ) )
-		vips_image_get_double( write->in, "rad-aspect", &write->aspect );
+		vips_image_get_double( write->in, 
+			"rad-aspect", &write->aspect );
 
 	if( vips_image_get_typeof( write->in, "rad-format" ) &&
 		!vips_image_get_string( write->in, "rad-format", &str ) )
@@ -1252,7 +1062,8 @@ vips2rad_make_header( Write *write )
 
 	for( i = 0; i < 3; i++ )
 		if( vips_image_get_typeof( write->in, colcor_name[i] ) && 
-			!vips_image_get_double( write->in, colcor_name[i], &d ) )
+			!vips_image_get_double( write->in, 
+				colcor_name[i], &d ) )
 			write->colcor[i] = d;
 
 	for( i = 0; i < 4; i++ )
@@ -1276,16 +1087,53 @@ vips2rad_put_header( Write *write )
 {
 	vips2rad_make_header( write );
 
-	fprintf( write->fout, "#?RADIANCE\n" );
+	vips_target_writes( write->target, "#?RADIANCE\n" );
+	vips_target_writef( write->target, "%s%s\n", FMTSTR, write->format );
+	vips_target_writef( write->target, "%s%e\n", EXPOSSTR, write->expos );
+	vips_target_writef( write->target, 
+		"%s %f %f %f\n", COLCORSTR, 
+		write->colcor[RED], write->colcor[GRN], write->colcor[BLU] );
+	vips_target_writef( write->target, 
+		"SOFTWARE=vips %s\n", vips_version_string() );
+	vips_target_writef( write->target, 
+		"%s%f\n", ASPECTSTR, write->aspect );
+	vips_target_writef( write->target, 
+		"%s %.4f %.4f %.4f %.4f %.4f %.4f %.4f %.4f\n", 
+		PRIMARYSTR, 
+		write->prims[RED][CIEX], write->prims[RED][CIEY], 
+		write->prims[GRN][CIEX], write->prims[GRN][CIEY], 
+		write->prims[BLU][CIEX], write->prims[BLU][CIEY], 
+		write->prims[WHT][CIEX], write->prims[WHT][CIEY] );
+	vips_target_writes( write->target, "\n" );
+	vips_target_writes( write->target, 
+		resolu2str( resolu_buf, &write->rs ) );
 
-	fputformat( write->format, write->fout );
-	fputexpos( write->expos, write->fout );
-	fputcolcor( write->colcor, write->fout );
-	fprintf( write->fout, "SOFTWARE=vips %s\n", vips_version_string() );
-	fputaspect( write->aspect, write->fout );
-	fputprims( write->prims, write->fout );
-	fputs( "\n", write->fout );
-	fputsresolu( &write->rs, write->fout );
+	return( 0 );
+}
+
+/* Write a single scanline to buffer.
+ */
+static int
+scanline_write( Write *write, COLR *scanline, int width )
+{
+	if( width < MINELEN || 
+		width > MAXELEN ) {
+		/* Too large or small for RLE ... do a simple write.
+		 */
+		if( vips_target_write( write->target, 
+			scanline, sizeof( COLR ) * width ) )
+			return( -1 );
+	}
+	else {
+		int length;
+
+		/* An RLE scanline.
+		 */
+		rle_scanline_write( scanline, width, write->line, &length );
+
+		if( vips_target_write( write->target, write->line, length ) )
+			return( -1 );
+	}
 
 	return( 0 );
 }
@@ -1299,7 +1147,7 @@ vips2rad_put_data_block( VipsRegion *region, VipsRect *area, void *a )
 	for( i = 0; i < area->height; i++ ) {
 		VipsPel *p = VIPS_REGION_ADDR( region, 0, area->top + i );
 
-		if( scanline_write( (COLR *) p, area->width, write->fout ) ) 
+		if( scanline_write( write, (COLR *) p, area->width ) ) 
 			return( -1 );
 	}
 
@@ -1316,119 +1164,7 @@ vips2rad_put_data( Write *write )
 }
 
 int
-vips__rad_save( VipsImage *in, const char *filename )
-{
-	Write *write;
-
-#ifdef DEBUG
-	printf( "vips2rad: writing \"%s\"\n", filename );
-#endif /*DEBUG*/
-
-	if( vips_image_pio_input( in ) ||
-		vips_check_coding_rad( "vips2rad", in ) )
-		return( -1 );
-	if( !(write = write_new( in )) )
-		return( -1 );
-
-	write->filename = vips_strdup( NULL, filename );
-	write->fout = vips__file_open_write( filename, FALSE );
-
-	if( !write->filename || 
-		!write->fout ||
-		vips2rad_put_header( write ) ||
-		vips2rad_put_data( write ) ) {
-		write_destroy( write );
-		return( -1 );
-	}
-	write_destroy( write );
-
-	return( 0 );
-}
-
-static int
-vips2rad_put_header_buf( Write *write )
-{
-	vips2rad_make_header( write );
-
-	vips_dbuf_writef( &write->dbuf, "#?RADIANCE\n" );
-	vips_dbuf_writef( &write->dbuf, "%s%s\n", FMTSTR, write->format );
-	vips_dbuf_writef( &write->dbuf, "%s%e\n", EXPOSSTR, write->expos );
-	vips_dbuf_writef( &write->dbuf, "%s %f %f %f\n", 
-		COLCORSTR, 
-		write->colcor[RED], write->colcor[GRN], write->colcor[BLU] );
-	vips_dbuf_writef( &write->dbuf, "SOFTWARE=vips %s\n", 
-		vips_version_string() );
-	vips_dbuf_writef( &write->dbuf, "%s%f\n", ASPECTSTR, write->aspect );
-	vips_dbuf_writef( &write->dbuf, 
-		"%s %.4f %.4f %.4f %.4f %.4f %.4f %.4f %.4f\n", 
-		PRIMARYSTR, 
-		write->prims[RED][CIEX], write->prims[RED][CIEY], 
-		write->prims[GRN][CIEX], write->prims[GRN][CIEY], 
-		write->prims[BLU][CIEX], write->prims[BLU][CIEY], 
-		write->prims[WHT][CIEX], write->prims[WHT][CIEY] );
-	vips_dbuf_writef( &write->dbuf, "\n" );
-	vips_dbuf_writef( &write->dbuf, "%s", 
-		resolu2str( resolu_buf, &write->rs ) );
-
-	return( 0 );
-}
-
-/* Write a single scanline to buffer.
- */
-static int
-scanline_write_buf( Write *write, COLR *scanline, int width )
-{
-	unsigned char *buffer;
-	size_t size;
-	int length;
-
-	vips_dbuf_allocate( &write->dbuf, MAX_LINE );
-	buffer = vips_dbuf_get_write( &write->dbuf, &size );
-
-	if( width < MINELEN || 
-		width > MAXELEN ) {
-		/* Write as a flat scanline.
-		 */
-		length = sizeof( COLR ) * width;
-		memcpy( buffer, scanline, length ); 
-	}
-	else 
-		/* An RLE scanline.
-		 */
-		rle_scanline_write( scanline, width, buffer, &length );
-
-	vips_dbuf_seek( &write->dbuf, length - size, SEEK_CUR ); 
-
-	return( 0 );
-}
-
-static int
-vips2rad_put_data_block_buf( VipsRegion *region, VipsRect *area, void *a )
-{
-	Write *write = (Write *) a;
-	int i;
-
-	for( i = 0; i < area->height; i++ ) {
-		VipsPel *p = VIPS_REGION_ADDR( region, 0, area->top + i );
-
-		if( scanline_write_buf( write, (COLR *) p, area->width ) ) 
-			return( -1 );
-	}
-
-	return( 0 );
-}
-
-static int
-vips2rad_put_data_buf( Write *write )
-{
-	if( vips_sink_disc( write->in, vips2rad_put_data_block_buf, write ) )
-		return( -1 );
-
-	return( 0 );
-}
-
-int
-vips__rad_save_buf( VipsImage *in, void **obuf, size_t *olen )
+vips__rad_save( VipsImage *in, VipsTarget *target )
 {
 	Write *write;
 
@@ -1437,18 +1173,18 @@ vips__rad_save_buf( VipsImage *in, void **obuf, size_t *olen )
 #endif /*DEBUG*/
 
 	if( vips_image_pio_input( in ) ||
-		vips_check_coding_rad( "vips2rad", in ) )
+		vips_check_coding( "vips2rad", in, VIPS_CODING_RAD ) )
 		return( -1 );
-	if( !(write = write_new( in )) ) 
+	if( !(write = write_new( in, target )) ) 
 		return( -1 );
 
-	if( vips2rad_put_header_buf( write ) ||
-		vips2rad_put_data_buf( write ) ) {
+	if( vips2rad_put_header( write ) ||
+		vips2rad_put_data( write ) ) {
 		write_destroy( write );
 		return( -1 );
 	}
 
-	*obuf = vips_dbuf_steal( &write->dbuf, olen );
+	vips_target_finish( target );
 
 	write_destroy( write );
 

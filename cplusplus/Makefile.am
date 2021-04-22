@@ -11,6 +11,7 @@ lib_LTLIBRARIES = libvips-cpp.la
 libvips_cpp_la_SOURCES = \
 	VImage.cpp \
 	VInterpolate.cpp \
+	VConnection.cpp \
 	VError.cpp 
 
 libvips_cpp_la_LDFLAGS = \
@@ -25,10 +26,28 @@ vips-operators.cpp:
 	echo -n "// " >> vips-operators.cpp; \
 	date >> vips-operators.cpp; \
 	echo "// this file is generated automatically, do not edit!" >> vips-operators.cpp; \
-	echo "" >> vips-operators.cpp; \
-	./gen-operators.py >> vips-operators.cpp 
+	./gen-operators.py -g cpp >> vips-operators.cpp
+
+if HAVE_DOXYGEN
+html_DATA = html
+endif
+
+html: doxygen.stamp
+
+doxygen.stamp: Doxyfile
+	$(DOXYGEN) $^
+	touch doxygen.stamp
+
+install-htmlDATA:
+	-mkdir -p $(DESTDIR)$(htmldir)
+	-cp -r html $(DESTDIR)$(htmldir)
+
+uninstall-htmlDATA:
+	rm -rf $(DESTDIR)$(htmldir)/html
 
 EXTRA_DIST = \
-	README \
+	README.md \
 	vips-operators.cpp \
+	Doxyfile.in \
 	gen-operators.py
+

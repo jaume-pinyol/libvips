@@ -154,7 +154,7 @@ unsigned_fixed_round( int v )
 	return( (v + round_by) >> VIPS_INTERPOLATE_SHIFT );
 }
 
-/* Fixed-point integer bicubic, used for 8 and 16-bit types.
+/* Fixed-point integer bicubic, used for 8-bit types.
  */
 template <typename T> static int inline
 bicubic_unsigned_int(
@@ -206,7 +206,7 @@ signed_fixed_round( int v )
 	return( (v + round_by) >> VIPS_INTERPOLATE_SHIFT );
 }
 
-/* Fixed-point integer bicubic, used for 8 and 16-bit types.
+/* Fixed-point integer bicubic, used for 8-bit types.
  */
 template <typename T> static int inline
 bicubic_signed_int(
@@ -312,6 +312,89 @@ calculate_coefficients_catmull( double c[4], const double x )
 }
 
 /* Given an x in [0,1] (we can have x == 1 when building tables),
+ * calculate c0 .. c(@shrink + 1), the triangle coefficients. This is called
+ * from the interpolator as well as from the table builder.
+ */
+static void inline
+calculate_coefficients_triangle( double *c, 
+	const double shrink, const double x )
+{
+	/* Needs to be in sync with vips_reduce_get_points().
+	 */
+	const int n_points = 2 * rint( shrink ) + 1;
+	const double half = x + n_points / 2.0 - 1;
+
+	int i;
+	double sum; 
+
+	sum = 0;
+	for( i = 0; i < n_points; i++ ) {
+		const double xp = (i - half) / shrink;
+
+		double l;
+
+		l = 1.0 - VIPS_FABS( xp );
+		l = VIPS_MAX( 0.0, l ); 
+
+		c[i] = l;
+		sum += l;
+	}
+
+	for( i = 0; i < n_points; i++ ) 
+		c[i] /= sum;
+}
+
+/* Generate a cubic filter. See:
+ *
+ * Mitchell and Netravali, Reconstruction Filters in Computer Graphics 
+ * Computer Graphics, Volume 22, Number 4, August 1988.
+ *
+ * B = 1,   C = 0   - cubic B-spline
+ * B = 1/3, C = 1/3 - Mitchell
+ * B = 0,   C = 1/2 - Catmull-Rom spline
+ */
+static void inline
+calculate_coefficients_cubic( double *c, 
+	const double shrink, const double x, double B, double C )
+{
+	/* Needs to be in sync with vips_reduce_get_points().
+	 */
+	const int n_points = 2 * rint( 2 * shrink ) + 1; 
+	const double half = x + n_points / 2.0 - 1;
+
+	int i;
+	double sum; 
+
+	sum = 0;
+	for( i = 0; i < n_points; i++ ) {
+		const double xp = (i - half) / shrink;
+		const double axp = VIPS_FABS( xp ); 
+		const double axp2 = axp * axp;
+		const double axp3 = axp2 * axp;
+
+		double l;
+
+		if( axp <= 1 ) 
+			l = ((12 - 9 * B - 6 * C) * axp3 +
+			     (-18 + 12 * B + 6 * C) * axp2 + 
+			     (6 - 2 * B)) / 6;
+		else if( axp <= 2 )
+			l = ((-B - 6 * C) * axp3 +
+			     (6 * B + 30 * C) * axp2 + 
+			     (-12 * B - 48 * C) * axp + 
+			     (8 * B + 24 * C)) / 6;
+		else 
+			l = 0.0;
+
+		c[i] = l;
+		sum += l;
+	}
+
+	for( i = 0; i < n_points; i++ ) 
+		c[i] /= sum;
+}
+
+/* Given an x in [0,1] (we can have x == 1 when building tables),
  * calculate c0 .. c(@a * @shrink + 1), the lanczos coefficients. This is called
  * from the interpolator as well as from the table builder.
  *
@@ -325,14 +408,15 @@ calculate_coefficients_lanczos( double *c,
 {
 	/* Needs to be in sync with vips_reduce_get_points().
 	 */
-	const int n_points = rint( 2 * a * shrink ) + 1; 
+	const int n_points = 2 * rint( a * shrink ) + 1; 
+	const double half = x + n_points / 2.0 - 1;
 
 	int i;
 	double sum; 
 
 	sum = 0;
 	for( i = 0; i < n_points; i++ ) {
-		double xp = (i - (n_points - 2) / 2 - x) / shrink;
+		const double xp = (i - half) / shrink;
 
 		double l;
 
@@ -365,8 +449,10 @@ reduce_sum( const T * restrict in, int stride, const IT * restrict c, int n )
 	IT sum;
 
 	sum = 0; 
-	for( int i = 0; i < n; i++ )
-		sum += c[i] * in[i * stride];
+	for( int i = 0; i < n; i++ ) {
+		sum += c[i] * in[0];
+		in += stride;
+	}
 
 	return( sum ); 
 }

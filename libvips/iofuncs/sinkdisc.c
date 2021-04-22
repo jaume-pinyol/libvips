@@ -157,7 +157,7 @@ wbuffer_free( WriteBuffer *wbuffer )
 	vips_semaphore_destroy( &wbuffer->go );
 	vips_semaphore_destroy( &wbuffer->nwrite );
 	vips_semaphore_destroy( &wbuffer->done );
-	vips_free( wbuffer );
+	g_free( wbuffer );
 }
 
 static void
@@ -254,7 +254,7 @@ wbuffer_flush( Write *write )
 	if( write->buf->area.top > 0 ) {
 		vips_semaphore_down( &write->buf_back->done );
 
-		/* Previous write suceeded?
+		/* Previous write succeeded?
 		 */
 		if( write->buf_back->write_errno ) {
 			vips_error_system( write->buf_back->write_errno,
@@ -469,10 +469,10 @@ write_free( Write *write )
  */
 
 /**
- * vips_sink_disc:
+ * vips_sink_disc: (method)
  * @im: image to process
- * @write_fn: called for every batch of pixels
- * @a: client data
+ * @write_fn: (scope call): called for every batch of pixels
+ * @a: (closure write_fn): client data
  *
  * vips_sink_disc() loops over @im, top-to-bottom, generating it in sections.
  * As each section is produced, @write_fn is called.

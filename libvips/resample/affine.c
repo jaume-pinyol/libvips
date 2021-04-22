@@ -1,6 +1,5 @@
 /* affine transform with a supplied interpolator.
  *
- * 
  * Copyright N. Dessipris
  * Written on: 01/11/1991
  * Modified on: 12/3/92 JC
@@ -84,6 +83,13 @@
  * 1/8/14
  * 	- revise transform ... again
  * 	- see new stress test in nip2/test/extras
+ * 7/11/17
+ * 	- add "extend" param
+ * 	- add "background" parameter
+ * 	- better clipping means we have no jaggies on edges
+ * 	- premultiply alpha 
+ * 18/5/20
+ * 	- add "premultiplied" flag
  */
 
 /*
@@ -116,6 +122,7 @@
 /*
 #define DEBUG_VERBOSE
 #define DEBUG
+#define VIPS_DEBUG
  */
 
 #ifdef HAVE_CONFIG_H
@@ -148,6 +155,22 @@ typedef struct _VipsAffine {
 	double idy;
 
 	VipsTransformation trn;
+
+	/* How to generate extra edge pixels.
+	 */
+	VipsExtend extend;
+
+	/* Background colour.
+	 */
+	VipsArrayDouble *background;
+
+	/* The [double] converted to the input image format.
+	 */
+	VipsPel *ink;
+
+	/* True if the input is already premultiplied (and we don't need to).
+	 */
+	gboolean premultiplied;
 
 } VipsAffine;
 
@@ -275,7 +298,7 @@ vips_affine_gen( VipsRegion *or, void *seq, void *a, void *b, gboolean *stop )
 #endif /*DEBUG_VERBOSE*/
 
 	if( vips_rect_isempty( &clipped ) ) {
-		vips_region_black( or );
+		vips_region_paint_pel( or, r, affine->ink );
 		return( 0 );
 	}
 	if( vips_region_prepare( ir, &clipped ) )
@@ -336,9 +359,9 @@ vips_affine_gen( VipsRegion *or, void *seq, void *a, void *b, gboolean *stop )
 			/* Clip against iarea.
 			 */
 			if( fx >= ile &&
-				fx < iri &&
+				fx <= iri &&
 				fy >= ito &&
-				fy < ibo ) {
+				fy <= ibo ) {
 				/* Verify that we can read the whole stencil.
 				 * With DEBUG on this will range-check.
 				 */
@@ -355,8 +378,10 @@ vips_affine_gen( VipsRegion *or, void *seq, void *a, void *b, gboolean *stop )
 					q, ir, ix, iy );
 			}
 			else {
+				/* Out of range: paint the background.
+				 */
 				for( z = 0; z < ps; z++ ) 
-					q[z] = 0;
+					q[z] = affine->ink[z];
 			}
 
 			ix += ddx;
@@ -378,13 +403,18 @@ vips_affine_build( VipsObject *object )
 	VipsObjectClass *class = VIPS_OBJECT_GET_CLASS( object );
 	VipsResample *resample = VIPS_RESAMPLE( object );
 	VipsAffine *affine = (VipsAffine *) object;
-	VipsImage **t = (VipsImage **) vips_object_local_array( object, 4 );
+	VipsImage **t = (VipsImage **) vips_object_local_array( object, 7 );
 
 	VipsImage *in;
 	VipsDemandStyle hint; 
 	int window_size;
 	int window_offset;
 	double edge;
+
+	/* TRUE if we've premultiplied and need to unpremultiply.
+	 */
+	gboolean have_premultiplied;
+	VipsBandFormat unpremultiplied_format;
 
 	if( VIPS_OBJECT_CLASS( vips_affine_parent_class )->build( object ) )
 		return( -1 );
@@ -398,24 +428,11 @@ vips_affine_build( VipsObject *object )
 		vips_check_vector_length( class->nickname, 
 			affine->oarea->n, 4 ) )
 		return( -1 );
-	/* We can't use vips_object_argument_isset(), since it may have been
-	 * set to NULL, see vips_similarity().
+
+	/* Can be set explicitly to NULL to mean default setting. 
 	 */
-	if( !affine->interpolate ) {
-		VipsInterpolate *interpolate;
-
-		interpolate = vips_interpolate_new( "bilinear" );
-		g_object_set( object, 
-			"interpolate", interpolate,
-			NULL ); 
-		g_object_unref( interpolate );
-
-		/* coverity gets confused by this, it thinks
-		 * affine->interpolate may still be null. Assign ourselves,
-		 * even though we don't need to.
-		 */
-		affine->interpolate = interpolate;
-	}
+	if( !affine->interpolate )
+		affine->interpolate = vips_interpolate_new( "bilinear" );
 
 	in = resample->in;
 
@@ -492,14 +509,53 @@ vips_affine_build( VipsObject *object )
 	in = t[0];
 
 	/* Add new pixels around the input so we can interpolate at the edges.
+	 *
+	 * We add the interpolate stencil, plus one extra pixel on all the
+	 * edges. This means when we clip in generate (above) we can be sure 
+	 * we clip outside the real pixels and don't get jaggies on edges.
 	 */
 	if( vips_embed( in, &t[2], 
-		window_offset, window_offset, 
-		in->Xsize + window_size - 1, in->Ysize + window_size - 1,
-		"extend", VIPS_EXTEND_COPY,
+		window_offset + 1, window_offset + 1, 
+		in->Xsize + window_size - 1 + 2, 
+		in->Ysize + window_size - 1 + 2,
+		"extend", affine->extend,
+		"background", affine->background,
 		NULL ) )
 		return( -1 );
 	in = t[2];
+
+	/* We've added a one-pixel border to the input: displace the transform
+	 * to compensate.
+	 */
+	affine->trn.idx -= 1;
+	affine->trn.idy -= 1;
+
+	/* If there's an alpha and we've not premultiplied, we have to 
+	 * premultiply before resampling. See 
+	 * https://github.com/libvips/libvips/issues/291
+	 */
+	have_premultiplied = FALSE;
+	if( vips_image_hasalpha( in ) &&
+		!affine->premultiplied ) { 
+		if( vips_premultiply( in, &t[3], NULL ) ) 
+			return( -1 );
+		have_premultiplied = TRUE;
+
+		/* vips_premultiply() makes a float image. When we
+		 * vips_unpremultiply() below, we need to cast back to the
+		 * pre-premultiply format.
+		 */
+		unpremultiplied_format = in->BandFmt;
+		in = t[3];
+	}
+
+	/* Convert the background to the image's format.
+	 */
+	if( !(affine->ink = vips__vector_to_ink( class->nickname, 
+		in,
+		VIPS_AREA( affine->background )->data, NULL, 
+		VIPS_AREA( affine->background )->n )) )
+		return( -1 );
 
 	/* Normally SMALLTILE ... except if this is strictly a size 
 	 * up/down affine.
@@ -510,11 +566,12 @@ vips_affine_build( VipsObject *object )
 	else 
 		hint = VIPS_DEMAND_STYLE_SMALLTILE;
 
-	if( vips_image_pipelinev( resample->out, hint, in, NULL ) )
+	t[4] = vips_image_new();
+	if( vips_image_pipelinev( t[4], hint, in, NULL ) )
 		return( -1 );
 
-	resample->out->Xsize = affine->trn.oarea.width;
-	resample->out->Ysize = affine->trn.oarea.height;
+	t[4]->Xsize = affine->trn.oarea.width;
+	t[4]->Ysize = affine->trn.oarea.height;
 
 #ifdef DEBUG
 	printf( "vips_affine_build: transform: " ); 
@@ -524,20 +581,32 @@ vips_affine_build( VipsObject *object )
 	printf( " input image width = %d, height = %d\n", 
 		in->Xsize, in->Ysize ); 
 	printf( " output image width = %d, height = %d\n", 
-		resample->out->Xsize, resample->out->Ysize ); 
+		t[4]->Xsize, t[4]->Ysize ); 
 #endif /*DEBUG*/
 
 	/* Generate!
 	 */
-	if( vips_image_generate( resample->out, 
+	if( vips_image_generate( t[4], 
 		vips_start_one, vips_affine_gen, vips_stop_one, 
 		in, affine ) )
 		return( -1 );
 
 	/* Finally: can now set Xoffset/Yoffset.
 	 */
-	resample->out->Xoffset = affine->trn.odx - affine->trn.oarea.left;
-	resample->out->Yoffset = affine->trn.ody - affine->trn.oarea.top;
+	t[4]->Xoffset = affine->trn.odx - affine->trn.oarea.left;
+	t[4]->Yoffset = affine->trn.ody - affine->trn.oarea.top;
+
+	in = t[4];
+
+	if( have_premultiplied ) {
+		if( vips_unpremultiply( in, &t[5], NULL ) || 
+			vips_cast( t[5], &t[6], unpremultiplied_format, NULL ) )
+			return( -1 );
+		in = t[6];
+	}
+
+	if( vips_image_write( in, resample->out ) )
+		return( -1 );
 
 	return( 0 );
 }
@@ -604,17 +673,41 @@ vips_affine_class_init( VipsAffineClass *class )
 		VIPS_ARGUMENT_OPTIONAL_INPUT,
 		G_STRUCT_OFFSET( VipsAffine, idy ),
 		-10000000, 10000000, 0 );
+
+	VIPS_ARG_ENUM( class, "extend", 117, 
+		_( "Extend" ), 
+		_( "How to generate the extra pixels" ),
+		VIPS_ARGUMENT_OPTIONAL_INPUT,
+		G_STRUCT_OFFSET( VipsAffine, extend ),
+		VIPS_TYPE_EXTEND, VIPS_EXTEND_BACKGROUND );
+
+	VIPS_ARG_BOXED( class, "background", 116, 
+		_( "Background" ), 
+		_( "Background value" ),
+		VIPS_ARGUMENT_OPTIONAL_INPUT,
+		G_STRUCT_OFFSET( VipsAffine, background ),
+		VIPS_TYPE_ARRAY_DOUBLE );
+
+	VIPS_ARG_BOOL( class, "premultiplied", 117,
+		_( "Premultiplied" ),
+		_( "Images have premultiplied alpha" ),
+		VIPS_ARGUMENT_OPTIONAL_INPUT,
+		G_STRUCT_OFFSET( VipsAffine, premultiplied ),
+		FALSE );
+
 }
 
 static void
 vips_affine_init( VipsAffine *affine )
 {
+	affine->extend = VIPS_EXTEND_BACKGROUND;
+	affine->background = vips_array_double_newv( 1, 0.0 );
 }
 
 /**
- * vips_affine:
+ * vips_affine: (method)
  * @in: input image
- * @out: output image
+ * @out: (out): output image
  * @a: transformation matrix coefficient
  * @b: transformation matrix coefficient
  * @c: transformation matrix coefficient
@@ -629,26 +722,40 @@ vips_affine_init( VipsAffine *affine )
  * * @idy: %gdouble, input vertical offset
  * * @odx: %gdouble, output horizontal offset
  * * @ody: %gdouble, output vertical offset
+ * * @extend: #VipsExtend how to generate new pixels 
+ * * @background: #VipsArrayDouble colour for new pixels 
+ * * @premultiplied: %gboolean, images are already premultiplied
  *
  * This operator performs an affine transform on an image using @interpolate.
  *
  * The transform is:
  *
+ * |[
  *   X = @a * (x + @idx) + @b * (y + @idy) + @odx
  *   Y = @c * (x + @idx) + @d * (y + @idy) + @doy
  * 
- *   x and y are the coordinates in input image.  
- *   X and Y are the coordinates in output image.
- *   (0,0) is the upper left corner.
+ *   where: 
+ *     x and y are the coordinates in input image.  
+ *     X and Y are the coordinates in output image.
+ *     (0,0) is the upper left corner.
+ * ]|
  *
  * The section of the output space defined by @oarea is written to
  * @out. @oarea is a four-element int array of left, top, width, height. 
  * By default @oarea is just large enough to cover the whole of the 
  * transformed input image.
  *
+ * By default, new pixels are filled with @background. This defaults to 
+ * zero (black). You can set other extend types with @extend. #VIPS_EXTEND_COPY 
+ * is better for image upsizing.
+ *
  * @interpolate defaults to bilinear. 
  *
  * @idx, @idy, @odx, @ody default to zero.
+ *
+ * Image are normally treated as unpremultiplied, so this operation can be used
+ * directly on PNG images. If your images have been through vips_premultiply(),
+ * set @premultiplied. 
  *
  * This operation does not change xres or yres. The image resolution needs to
  * be updated by the application. 
@@ -665,7 +772,7 @@ vips_affine( VipsImage *in, VipsImage **out,
 	VipsArea *matrix;
 	int result;
 
-	matrix = (VipsArea *) vips_array_double_newv( 4, a, b, c, d );
+	matrix = VIPS_AREA( vips_array_double_newv( 4, a, b, c, d ) );
 
 	va_start( ap, d );
 	result = vips_call_split( "affine", ap, in, out, matrix );

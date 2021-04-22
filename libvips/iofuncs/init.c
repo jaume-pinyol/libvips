@@ -26,6 +26,10 @@
  * 	  constructed before we go parallel
  * 18/9/16
  * 	- call _setmaxstdio() on win32
+ * 4/8/17
+ * 	- hide warnings is VIPS_WARNING is set
+ * 20/4/19
+ * 	- set the min stack, if we can
  */
 
 /*
@@ -59,10 +63,18 @@
 #define DEBUG
  */
 
+/* pthread_setattr_default_np() is a non-portable GNU extension.
+ */
+#define _GNU_SOURCE
+
 #ifdef HAVE_CONFIG_H
 #include <config.h>
 #endif /*HAVE_CONFIG_H*/
 #include <vips/intl.h>
+
+#ifdef HAVE_PTHREAD_DEFAULT_NP
+#include <pthread.h>
+#endif /*HAVE_PTHREAD_DEFAULT_NP*/
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -78,14 +90,24 @@
 #include <limits.h>
 #include <string.h>
 
+/* Disable deprecation warnings from gsf. There are loads, and still not
+ * patched as of 12/2020.
+ */
 #ifdef HAVE_GSF
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
 #include <gsf/gsf.h>
+#pragma GCC diagnostic pop
 #endif /*HAVE_GSF*/
 
 #include <vips/vips.h>
 #include <vips/thread.h>
 #include <vips/internal.h>
 #include <vips/vector.h>
+
+#if ENABLE_DEPRECATED
+#include <vips/vips7compat.h>
+#endif
 
 /* abort() on the first warning or error.
  */
@@ -95,6 +117,10 @@ int vips__fatal = 0;
  * making a private one.
  */
 GMutex *vips__global_lock = NULL;
+
+/* A debugging timer, zero at library init.
+ */
+GTimer *vips__global_timer = NULL;
 
 /* Keep a copy of the argv0 here.
  */
@@ -109,6 +135,8 @@ int vips__leak = 0;
  */
 GQuark vips__image_pixels_quark = 0; 
 #endif /*DEBUG_LEAK*/
+
+static gint64 vips_pipe_read_limit = 1024 * 1024 * 1024;
 
 /**
  * vips_get_argv0:
@@ -128,12 +156,19 @@ vips_get_argv0( void )
  * VIPS_INIT:
  * @ARGV0: name of application
  *
+ * gtk-doc mistakenly tags this macro as deprecated for unknown reasons. It is
+ * *NOT* deprecated, please ignore the warning above. 
+ *
  * VIPS_INIT() starts up the world of VIPS. You should call this on
  * program startup before using any other VIPS operations. If you do not call
  * VIPS_INIT(), VIPS will call it for you when you use your first VIPS 
  * operation, but it may not be able to get hold of @ARGV0 and VIPS may 
  * therefore be unable to find its data files. It is much better to call 
  * this macro yourself.
+ *
+ * @ARGV0 is used to help discover message catalogues if libvips has been 
+ * relocated. If you don't need a relocatable package, you can just pass `""`
+ * and it'll be fine.
  *
  * Additionally, VIPS_INIT() can be run from any thread, but it must not be
  * called from more than one thread at the same time. This is much easier to 
@@ -147,10 +182,16 @@ vips_get_argv0( void )
  * must not call VIPS_INIT() after vips_shutdown(). In other words, you cannot
  * stop and restart vips. 
  *
+ * Use the environment variable `VIPS_MIN_STACK_SIZE` to set the minimum stack
+ * size. For example, `2m` for a minimum of two megabytes of stack. This can
+ * be important for systems like musl where the default stack is very small.
+ *
  * VIPS_INIT() does approximately the following:
  *
  * + checks that the libvips your program is expecting is 
  *   binary-compatible with the vips library you're running against
+ *
+ * + sets a minimum stack size, see above
  *
  * + initialises any libraries that VIPS is using, including GObject
  *   and the threading system, if neccessary
@@ -241,6 +282,65 @@ vips_load_plugins( const char *fmt, ... )
 	return( result );
 }
 
+/* Install this log handler to hide warning messages.
+ */
+static void
+empty_log_handler( const gchar *log_domain, GLogLevelFlags log_level,
+	const gchar *message, gpointer user_data )
+{       
+}
+
+/* Attempt to set a minimum stacksize. This can be important on systems with a
+ * very low default, like musl.
+ */
+static void
+set_stacksize( guint64 size )
+{
+#ifdef HAVE_PTHREAD_DEFAULT_NP
+	pthread_attr_t attr;
+	guint64 cur_stack_size;
+
+	/* Don't allow stacks less than 2mb.
+	 */
+	size = VIPS_MAX( size, 2 * 1024 * 1024 );
+
+	if( pthread_attr_init( &attr ) ||
+		pthread_attr_getstacksize( &attr, &cur_stack_size ) ) {
+		g_warning( "set_stacksize: unable to get stack size" );
+		return;
+	}
+
+	if( cur_stack_size < size ) {
+		if( pthread_attr_setstacksize( &attr, size ) ||
+			pthread_setattr_default_np( &attr ) ) 
+			g_warning( "set_stacksize: unable to set stack size" );
+		else 
+			g_info( "set stack size to %" G_GUINT64_FORMAT "k", 
+				size / (guint64) 1024 );
+	}
+#endif /*HAVE_PTHREAD_DEFAULT_NP*/
+}
+
+static void
+vips_verbose( void ) 
+{
+	const char *old;
+
+	old = g_getenv( "G_MESSAGES_DEBUG" );
+
+	if( !old ) 
+		g_setenv( "G_MESSAGES_DEBUG", G_LOG_DOMAIN, TRUE );
+	else if( !g_str_equal( old, "all" ) &&
+		!g_strrstr( old, G_LOG_DOMAIN ) ) {
+		char *new;
+
+		new = g_strconcat( old, " ", G_LOG_DOMAIN, NULL );
+		g_setenv( "G_MESSAGES_DEBUG", new, TRUE );
+
+		g_free( new );
+	}
+}
+
 /**
  * vips_init:
  * @argv0: name of application
@@ -261,10 +361,15 @@ vips_init( const char *argv0 )
 	extern GType write_thread_state_get_type( void );
 	extern GType sink_memory_thread_state_get_type( void ); 
 	extern GType render_thread_state_get_type( void ); 
+	extern GType vips_source_get_type( void ); 
+	extern GType vips_source_custom_get_type( void ); 
+	extern GType vips_target_get_type( void ); 
+	extern GType vips_target_custom_get_type( void ); 
+	extern GType vips_g_input_stream_get_type( void ); 
 
 	static gboolean started = FALSE;
 	static gboolean done = FALSE;
-	char *prgname;
+	const char *vips_min_stack_size;
 	const char *prefix;
 	const char *libdir;
 	char *locale;
@@ -284,7 +389,7 @@ vips_init( const char *argv0 )
 		return( 0 );
 	started = TRUE;
 
-#ifdef OS_WIN32
+#ifdef G_OS_WIN32
 	/* Windows has a limit of 512 files open at once for the fopen() family
 	 * of functions, and 2048 for the _open() family. This raises the limit
 	 * of fopen() to the same level as _open().
@@ -292,38 +397,35 @@ vips_init( const char *argv0 )
 	 * It will not go any higher than this, unfortunately.  
 	 */
 	(void) _setmaxstdio( 2048 );
-#endif /*OS_WIN32*/
-
-#ifdef HAVE_TYPE_INIT
-	/* Before glib 2.36 you have to call this on startup.
-	 */
-	g_type_init();
-#endif /*HAVE_TYPE_INIT*/
-
-	/* Older glibs need this.
-	 */
-#ifndef HAVE_THREAD_NEW
-	if( !g_thread_supported() ) 
-		g_thread_init( NULL );
-#endif 
+#endif /*G_OS_WIN32*/
 
 	vips__threadpool_init();
 	vips__buffer_init();
+	vips__meta_init();
 
 	/* This does an unsynchronised static hash table init on first call --
 	 * we have to make sure we do this single-threaded. See: 
 	 * https://github.com/openslide/openslide/issues/161
 	 */
+#if !GLIB_CHECK_VERSION( 2, 48, 1 )
 	(void) g_get_language_names(); 
+#endif
 
 	if( !vips__global_lock )
 		vips__global_lock = vips_g_mutex_new();
 
+	if( !vips__global_timer )
+		vips__global_timer = g_timer_new();
+
 	VIPS_SETSTR( vips__argv0, argv0 );
 
-	prgname = g_path_get_basename( argv0 );
-	g_set_prgname( prgname );
-	g_free( prgname );
+	if( argv0 ) {
+		char *prgname;
+
+		prgname = g_path_get_basename( argv0 );
+		g_set_prgname( prgname );
+		g_free( prgname );
+	}
 
 	vips__thread_profile_attach( "main" );
 
@@ -347,16 +449,23 @@ vips_init( const char *argv0 )
 	g_free( locale );
 	bind_textdomain_codeset( GETTEXT_PACKAGE, "UTF-8" );
 
-	/* Deprecated, this is just for compat.
-	 */
-	if( g_getenv( "VIPS_INFO" ) || 
-		g_getenv( "IM_INFO" ) ) 
-		vips_info_set( TRUE );
-
-	/* Default various settings from env.
-	 */
+	if( g_getenv( "VIPS_INFO" )
+#if ENABLE_DEPRECATED
+		|| g_getenv( "IM_INFO" )
+#endif
+	)
+		vips_verbose();
+	if( g_getenv( "VIPS_PROFILE" ) )
+		vips_profile_set( TRUE );
+	if( g_getenv( "VIPS_LEAK" ) )
+		vips_leak_set( TRUE );
 	if( g_getenv( "VIPS_TRACE" ) )
 		vips_cache_set_trace( TRUE );
+	if( g_getenv( "VIPS_PIPE_READ_LIMIT" ) ) 
+		vips_pipe_read_limit = 
+			g_ascii_strtoll( g_getenv( "VIPS_PIPE_READ_LIMIT" ),
+				NULL, 10 );
+	vips_pipe_read_limit_set( vips_pipe_read_limit );
 
 	/* Register base vips types.
 	 */
@@ -365,9 +474,16 @@ vips_init( const char *argv0 )
 	(void) write_thread_state_get_type();
 	(void) sink_memory_thread_state_get_type(); 
 	(void) render_thread_state_get_type(); 
+	(void) vips_source_get_type(); 
+	(void) vips_source_custom_get_type(); 
+	(void) vips_target_get_type(); 
+	(void) vips_target_custom_get_type(); 
 	vips__meta_init_types();
 	vips__interpolate_init();
+
+#if ENABLE_DEPRECATED
 	im__format_init();
+#endif
 
 	/* Start up operator cache.
 	 */
@@ -392,6 +508,7 @@ vips_init( const char *argv0 )
 	vips_morphology_operation_init();
 	vips_draw_operation_init();
 	vips_mosaicing_operation_init();
+	vips_g_input_stream_get_type(); 
 
 	/* Load any vips8 plugins from the vips libdir. Keep going, even if
 	 * some plugins fail to load. 
@@ -399,6 +516,7 @@ vips_init( const char *argv0 )
 	(void) vips_load_plugins( "%s/vips-plugins-%d.%d", 
 		libdir, VIPS_MAJOR_VERSION, VIPS_MINOR_VERSION );
 
+#if ENABLE_DEPRECATED
 	/* Load up any vips7 plugins in the vips libdir. We don't error on 
 	 * failure, it's too annoying to have VIPS refuse to start because of 
 	 * a broken plugin.
@@ -416,6 +534,7 @@ vips_init( const char *argv0 )
 		g_warning( "%s", vips_error_buffer() );
 		vips_error_clear();
 	}
+#endif
 
 	/* Get the run-time compiler going.
 	 */
@@ -441,6 +560,26 @@ vips_init( const char *argv0 )
 
 	done = TRUE;
 
+	/* If VIPS_WARNING is defined, suppress all warning messages from vips.
+	 *
+	 * Libraries should not call g_log_set_handler(), it is
+	 * supposed to be for the application layer, but this can be awkward to
+	 * set up if you are using libvips from something like Ruby. Allow this
+	 * env var hack as a workaround. 
+	 */
+	if( g_getenv( "VIPS_WARNING" )
+#if ENABLE_DEPRECATED
+		|| g_getenv( "IM_WARNING" )
+#endif
+	)
+		g_log_set_handler( G_LOG_DOMAIN, G_LOG_LEVEL_WARNING, 
+			empty_log_handler, NULL );
+
+	/* Set a minimum stacksize, if we can.
+	 */
+        if( (vips_min_stack_size = g_getenv( "VIPS_MIN_STACK_SIZE" )) )
+		(void) set_stacksize( vips__parse_size( vips_min_stack_size ) );
+
 	vips__thread_gate_stop( "init: startup" ); 
 
 	return( 0 );
@@ -459,13 +598,20 @@ vips_check_init( void )
 		vips_error_clear();
 }
 
-static void
+static int
 vips_leak( void ) 
 {
 	char txt[1024];
 	VipsBuf buf = VIPS_BUF_STATIC( txt );
+	int n_leaks;
 
-	vips_object_print_all();
+	n_leaks = 0;
+
+	n_leaks += vips__object_leak();
+	n_leaks += vips__type_leak();
+	n_leaks += vips_tracked_get_allocs();
+	n_leaks += vips_tracked_get_mem();
+	n_leaks += vips_tracked_get_files();
 
 	if( vips_tracked_get_allocs() || 
 		vips_tracked_get_mem() ||
@@ -480,20 +626,27 @@ vips_leak( void )
 	vips_buf_append_size( &buf, vips_tracked_get_mem_highwater() );
 	vips_buf_appends( &buf, "\n" );
 
-	if( strlen( vips_error_buffer() ) > 0 ) 
+	if( strlen( vips_error_buffer() ) > 0 ) {
 		vips_buf_appendf( &buf, "error buffer: %s", 
 			vips_error_buffer() );
+		n_leaks += strlen( vips_error_buffer() );
+	}
 
-	if( vips__n_active_threads != 0 )
-		vips_buf_appendf( &buf, "threads: %d still active\n", 
+	if( vips__n_active_threads > 0 ) {
+		vips_buf_appendf( &buf, "threads: %d not joined\n", 
 			vips__n_active_threads ); 
+		n_leaks += vips__n_active_threads;
+	}
 
 	fprintf( stderr, "%s", vips_buf_all( &buf ) );
 
+	n_leaks += vips__print_renders();
 
 #ifdef DEBUG
 	vips_buffer_dump_all();
 #endif /*DEBUG*/
+
+	return( n_leaks );
 }
 
 /**
@@ -537,7 +690,9 @@ vips_shutdown( void )
 
 	vips_cache_drop_all();
 
+#if ENABLE_DEPRECATED
 	im_close_plugins();
+#endif
 
 	/* Mustn't run this more than once. Don't use the VIPS_GATE macro,
 	 * since we don't for gate start.
@@ -568,8 +723,9 @@ vips_shutdown( void )
 	{
 		static gboolean done = FALSE;
 
-		if( !done ) 
-			vips_leak();
+		if( !done &&
+			vips_leak() ) 
+			exit( 1 );
 
 		done = TRUE;
 	}
@@ -595,7 +751,7 @@ static gboolean
 vips_lib_info_cb( const gchar *option_name, const gchar *value, 
 	gpointer data, GError **error )
 {
-	vips_info_set( TRUE ); 
+	vips_verbose();
 
 	return( TRUE );
 }
@@ -623,6 +779,24 @@ vips_lib_version_cb( const gchar *option_name, const gchar *value,
 	gpointer data, GError **error )
 {
 	printf( "libvips %s\n", VIPS_VERSION_STRING );
+	vips_shutdown();
+	exit( 0 );
+}
+
+static gboolean
+vips_lib_config_cb( const gchar *option_name, const gchar *value, 
+	gpointer data, GError **error )
+{
+	char **split;
+	char *config;
+
+	split = g_strsplit( VIPS_CONFIG, ", ", -1 );
+	config = g_strjoinv( "\n", split );
+
+	printf( "%s\n", config );
+	g_strfreev( split );
+	g_free( config );
+
 	vips_shutdown();
 	exit( 0 );
 }
@@ -709,6 +883,12 @@ static GOptionEntry option_entries[] = {
 	{ "vips-version", 0, G_OPTION_FLAG_NO_ARG, 
 		G_OPTION_ARG_CALLBACK, (gpointer) &vips_lib_version_cb, 
 		N_( "print libvips version" ), NULL },
+	{ "vips-config", 0, G_OPTION_FLAG_NO_ARG, 
+		G_OPTION_ARG_CALLBACK, (gpointer) &vips_lib_config_cb, 
+		N_( "print libvips config" ), NULL },
+	{ "vips-pipe-read-limit", 0, 0, 
+		G_OPTION_ARG_INT64, (gpointer) &vips_pipe_read_limit, 
+		N_( "read at most this many bytes from a pipe" ), NULL },
 	{ NULL }
 };
 
@@ -774,7 +954,7 @@ extract_prefix( const char *dir, const char *name )
 	for( i = 0; i < (int) strlen( vname ); i++ ) 
 		if( vips_isprefix( G_DIR_SEPARATOR_S "." G_DIR_SEPARATOR_S, 
 			vname + i ) )
-			memcpy( vname + i, vname + i + 2, 
+			memmove( vname + i, vname + i + 2, 
 				strlen( vname + i + 2 ) + 1 );
 	if( vips_ispostfix( vname, G_DIR_SEPARATOR_S "." ) )
 		vname[strlen( vname ) - 2] = '\0';
@@ -845,7 +1025,7 @@ find_file( const char *name )
 	printf( "vips_guess_prefix: g_getenv( \"PATH\" ) == \"%s\"\n", path );
 #endif /*DEBUG*/
 
-#ifdef OS_WIN32
+#ifdef G_OS_WIN32
 {
 	char *dir; 
 
@@ -856,9 +1036,9 @@ find_file( const char *name )
 		"%s" G_SEARCHPATH_SEPARATOR_S "%s", dir, path );
 	g_free( dir ); 
 }
-#else /*!OS_WIN32*/
+#else /*!G_OS_WIN32*/
 	vips_strncpy( full_path, path, VIPS_PATH_MAX );
-#endif /*OS_WIN32*/
+#endif /*G_OS_WIN32*/
 
 	if( (prefix = scan_path( full_path, name )) ) 
 		return( prefix );
@@ -899,24 +1079,23 @@ guess_prefix( const char *argv0, const char *name )
 		}
         }
 
-#ifdef HAVE_REALPATH
-	/* Try to guess from cwd. Only if this is a relative path, though. No
- 	 * realpath on winders, but fortunately it seems to always generate
- 	 * a full path in argv[0].
+	/* Try to guess from cwd. Only if this is a relative path, though. 
 	 */
-	if( !g_path_is_absolute( argv0 ) ) {
+	if( argv0 &&
+		!g_path_is_absolute( argv0 ) ) {
+		char *dir;
 		char full_path[VIPS_PATH_MAX];
 		char *resolved;
-		char *dir;
 
 		dir = g_get_current_dir(); 
 		vips_snprintf( full_path, VIPS_PATH_MAX, 
 			"%s" G_DIR_SEPARATOR_S "%s", dir, argv0 );
 		g_free( dir ); 
 
-		if( (resolved = realpath( full_path, NULL )) ) {
+		if( (resolved = vips_realpath( full_path )) ) {
 			prefix = extract_prefix( resolved, name );
-			free( resolved ); 
+			g_free( resolved );
+
 			if( prefix ) { 
 #ifdef DEBUG
 				printf( "vips_guess_prefix: found \"%s\" "
@@ -926,7 +1105,6 @@ guess_prefix( const char *argv0, const char *name )
 			}
 		}
 	}
-#endif /*HAVE_REALPATH*/
 
 	/* Fall back to the configure-time prefix.
 	 */
@@ -967,9 +1145,9 @@ vips_guess_prefix( const char *argv0, const char *env_name )
                 return( prefix );
 	}
 
-#ifdef OS_WIN32
+#ifdef G_OS_WIN32
 	prefix = vips__windows_prefix();
-#else
+#else /*!G_OS_WIN32*/
 {
         char *basename;
 
@@ -977,7 +1155,7 @@ vips_guess_prefix( const char *argv0, const char *env_name )
 	prefix = guess_prefix( argv0, basename );
 	g_free( basename ); 
 }
-#endif
+#endif /*G_OS_WIN32*/
 
 	g_setenv( env_name, prefix, TRUE );
 
@@ -1089,8 +1267,8 @@ vips_version( int flag )
  * vips_leak_set:
  * @leak: turn leak checking on or off
  *
- * Turn on or off vips leak checking. See also --vips-leak and
- * vips_add_option_entries(). 
+ * Turn on or off vips leak checking. See also --vips-leak,
+ * vips_add_option_entries() and the `VIPS_LEAK` environment variable.
  *
  * You should call this very early in your program. 
  */

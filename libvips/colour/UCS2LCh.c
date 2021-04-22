@@ -127,7 +127,7 @@ make_hI( void )
 		for( i = 0; i < 361; i++ ) {
 			int k;
 
-			for( k = 0; k < 360 && hl[j][k] <= i; k++ ) 
+			for( k = 1; k < 360 && hl[j][k] <= i; k++ ) 
 				;
 
 			hI[j][i] = k - 1 + (i - hl[j][k - 1]) / 
@@ -228,7 +228,7 @@ vips_col_make_tables_CMC( void )
 {
 	static GOnce once = G_ONCE_INIT;
 
-	(void) g_once( &once, tables_init, NULL );
+	VIPS_ONCE( &once, tables_init, NULL );
 }
 
 /* Process a buffer of data.
@@ -284,9 +284,9 @@ vips_CMC2LCh_init( VipsCMC2LCh *CMC2LCh )
 }
 
 /**
- * vips_CMC2LCh:
+ * vips_CMC2LCh: (method)
  * @in: input image
- * @out: output image
+ * @out: (out): output image
  * @...: %NULL-terminated list of optional named arguments
  *
  * Turn LCh to CMC.

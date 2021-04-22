@@ -100,8 +100,6 @@ VIPS_ARGUMENT_OPTIONAL_OUTPUT   Eg. the x pos of the image minimum
 	(VIPS_ARGUMENT_OUTPUT | \
 	 VIPS_ARGUMENT_CONSTRUCT)
 
-extern int _vips__argument_id;
-
 #define VIPS_ARG_IMAGE( CLASS, NAME, PRIORITY, LONG, DESC, FLAGS, OFFSET ) { \
 	GParamSpec *pspec; \
 	\
@@ -109,22 +107,25 @@ extern int _vips__argument_id;
 		VIPS_TYPE_IMAGE, \
 		(GParamFlags) (G_PARAM_READWRITE) ); \
 	g_object_class_install_property( G_OBJECT_CLASS( CLASS ), \
-		_vips__argument_id++, pspec ); \
+		vips_argument_get_id(), pspec ); \
 	vips_object_class_install_argument( VIPS_OBJECT_CLASS( CLASS ), \
 		pspec, (VipsArgumentFlags) (FLAGS), (PRIORITY), (OFFSET) ); \
 }
 
-#define VIPS_ARG_INTERPOLATE( CLASS, NAME, PRIORITY, LONG, DESC, FLAGS, OFFSET ) { \
+#define VIPS_ARG_OBJECT( CLASS, NAME, PRIORITY, LONG, DESC, FLAGS, OFFSET, TYPE ) { \
 	GParamSpec *pspec; \
 	\
 	pspec = g_param_spec_object( (NAME), (LONG), (DESC),  \
-		VIPS_TYPE_INTERPOLATE, \
+		TYPE, \
 		(GParamFlags) (G_PARAM_READWRITE) ); \
 	g_object_class_install_property( G_OBJECT_CLASS( CLASS ), \
-		_vips__argument_id++, pspec ); \
+		vips_argument_get_id(), pspec ); \
 	vips_object_class_install_argument( VIPS_OBJECT_CLASS( CLASS ), \
 		pspec, (VipsArgumentFlags) (FLAGS), (PRIORITY), (OFFSET) ); \
 }
+
+#define VIPS_ARG_INTERPOLATE( CLASS, NAME, PRIORITY, LONG, DESC, FLAGS, OFFSET ) \
+	VIPS_ARG_OBJECT( CLASS, NAME, PRIORITY, LONG, DESC, FLAGS, OFFSET, VIPS_TYPE_INTERPOLATE )
 
 #define VIPS_ARG_BOOL( CLASS, NAME, PRIORITY, LONG, DESC, \
 	FLAGS, OFFSET, VALUE ) { \
@@ -134,7 +135,7 @@ extern int _vips__argument_id;
 		(VALUE), \
 		(GParamFlags) (G_PARAM_READWRITE) ); \
 	g_object_class_install_property( G_OBJECT_CLASS( CLASS ), \
-		_vips__argument_id++, pspec ); \
+		vips_argument_get_id(), pspec ); \
 	vips_object_class_install_argument( VIPS_OBJECT_CLASS( CLASS ), \
 		pspec, (VipsArgumentFlags) (FLAGS), (PRIORITY), (OFFSET) ); \
 }
@@ -147,7 +148,7 @@ extern int _vips__argument_id;
 		(MIN), (MAX), (VALUE), \
 		(GParamFlags) (G_PARAM_READWRITE) );\
 	g_object_class_install_property( G_OBJECT_CLASS( CLASS ), \
-		_vips__argument_id++, pspec ); \
+		vips_argument_get_id(), pspec ); \
 	vips_object_class_install_argument( VIPS_OBJECT_CLASS( CLASS ), \
 		pspec, (VipsArgumentFlags) (FLAGS), (PRIORITY), (OFFSET) ); \
 }
@@ -160,7 +161,7 @@ extern int _vips__argument_id;
 		(TYPE), \
 		(GParamFlags) (G_PARAM_READWRITE) );\
 	g_object_class_install_property( G_OBJECT_CLASS( CLASS ), \
-		_vips__argument_id++, pspec ); \
+		vips_argument_get_id(), pspec ); \
 	vips_object_class_install_argument( VIPS_OBJECT_CLASS( CLASS ), \
 		pspec, (VipsArgumentFlags) (FLAGS), (PRIORITY), (OFFSET) ); \
 }
@@ -173,7 +174,7 @@ extern int _vips__argument_id;
 		(MIN), (MAX), (VALUE), \
 		(GParamFlags) (G_PARAM_READWRITE) );\
 	g_object_class_install_property( G_OBJECT_CLASS( CLASS ), \
-		_vips__argument_id++, pspec ); \
+		vips_argument_get_id(), pspec ); \
 	vips_object_class_install_argument( VIPS_OBJECT_CLASS( CLASS ), \
 		pspec, (VipsArgumentFlags) (FLAGS), (PRIORITY), (OFFSET) ); \
 }
@@ -186,7 +187,7 @@ extern int _vips__argument_id;
 		(MIN), (MAX), (VALUE), \
 		(GParamFlags) (G_PARAM_READWRITE) );\
 	g_object_class_install_property( G_OBJECT_CLASS( CLASS ), \
-		_vips__argument_id++, pspec ); \
+		vips_argument_get_id(), pspec ); \
 	vips_object_class_install_argument( VIPS_OBJECT_CLASS( CLASS ), \
 		pspec, (VipsArgumentFlags) (FLAGS), (PRIORITY), (OFFSET) ); \
 }
@@ -199,7 +200,7 @@ extern int _vips__argument_id;
 		(TYPE), (VALUE), \
 		(GParamFlags) (G_PARAM_READWRITE) );\
 	g_object_class_install_property( G_OBJECT_CLASS( CLASS ), \
-		_vips__argument_id++, pspec ); \
+		vips_argument_get_id(), pspec ); \
 	vips_object_class_install_argument( VIPS_OBJECT_CLASS( CLASS ), \
 		pspec, (VipsArgumentFlags) (FLAGS), (PRIORITY), (OFFSET) ); \
 }
@@ -212,7 +213,7 @@ extern int _vips__argument_id;
 		(TYPE), (VALUE), \
 		(GParamFlags) (G_PARAM_READWRITE) );\
 	g_object_class_install_property( G_OBJECT_CLASS( CLASS ), \
-		_vips__argument_id++, pspec ); \
+		vips_argument_get_id(), pspec ); \
 	vips_object_class_install_argument( VIPS_OBJECT_CLASS( CLASS ), \
 		pspec, (VipsArgumentFlags) (FLAGS), (PRIORITY), (OFFSET) ); \
 }
@@ -225,7 +226,7 @@ extern int _vips__argument_id;
 		(VALUE), \
 		(GParamFlags) (G_PARAM_READWRITE) ); \
 	g_object_class_install_property( G_OBJECT_CLASS( CLASS ), \
-		_vips__argument_id++, pspec ); \
+		vips_argument_get_id(), pspec ); \
 	vips_object_class_install_argument( VIPS_OBJECT_CLASS( CLASS ), \
 		pspec, (VipsArgumentFlags) (FLAGS), (PRIORITY), (OFFSET) ); \
 }
@@ -235,8 +236,8 @@ extern int _vips__argument_id;
 	\
 	pspec = g_param_spec_pointer( (NAME), (LONG), (DESC), \
 		(GParamFlags) (G_PARAM_READWRITE) ); \
-	g_object_class_install_property( gobject_class,  \
-		_vips__argument_id++, pspec ); \
+	g_object_class_install_property( G_OBJECT_CLASS( CLASS ),  \
+		vips_argument_get_id(), pspec ); \
 	vips_object_class_install_argument( VIPS_OBJECT_CLASS( CLASS ), \
 		pspec, (VipsArgumentFlags) (FLAGS), (PRIORITY), (OFFSET) ); \
 }
@@ -296,6 +297,7 @@ typedef struct _VipsArgumentInstance {
  */
 typedef GHashTable VipsArgumentTable;
 
+int vips_argument_get_id( void );
 void vips__object_set_member( VipsObject *object, GParamSpec *pspec,
 	GObject **member, GObject *argument );
 typedef void *(*VipsArgumentMapFn)( VipsObject *object, GParamSpec *pspec,
@@ -303,6 +305,8 @@ typedef void *(*VipsArgumentMapFn)( VipsObject *object, GParamSpec *pspec,
 	VipsArgumentInstance *argument_instance, void *a, void *b );
 void *vips_argument_map( VipsObject *object, 
 	VipsArgumentMapFn fn, void *a, void *b );
+int vips_object_get_args( VipsObject *object, 
+	const char ***names, int **flags, int *n_args );
 typedef void *(*VipsArgumentClassMapFn)( VipsObjectClass *object_class, 
 	GParamSpec *pspec,
 	VipsArgumentClass *argument_class, void *a, void *b );
@@ -369,8 +373,8 @@ int vips_object_get_argument_priority( VipsObject *object, const char *name );
 		/* Input args are given inline, eg. ("factor", 12.0)  \
 		 * and must be collected. \
 		 */ \
-		g_value_init( &value, G_PARAM_SPEC_VALUE_TYPE( PSPEC ) ); \
-		G_VALUE_COLLECT( &value, AP, 0, &error ); \
+		G_VALUE_COLLECT_INIT( &value, \
+				G_PARAM_SPEC_VALUE_TYPE( PSPEC ), AP, 0, &error ); \
 		\
 		/* Don't bother with the error message. \
 		 */ \
@@ -451,7 +455,7 @@ struct _VipsObjectClass {
 
 	/* Just after build ... the object is fully ready for work. 
 	 */
-	int (*postbuild)( VipsObject *object );
+	int (*postbuild)( VipsObject *object, void *data );
 
 	/* Try to print something about the class, handy for help displays.
 	 * Keep to one line.

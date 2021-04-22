@@ -113,7 +113,7 @@ vips_scRGB2BW_line_16( unsigned short * restrict q, float * restrict p,
 		q += 1;
 
 		for( j = 0; j < extra_bands; j++ ) 
-			q[j] = VIPS_FCLIP( 0, p[j] * 256.0, USHRT_MAX ); 
+			q[j] = VIPS_CLIP( 0, (int) (p[j] * 256.0), USHRT_MAX );
 		p += extra_bands;
 		q += extra_bands;
 	}
@@ -261,9 +261,9 @@ vips_scRGB2BW_init( VipsscRGB2BW *scRGB2BW )
 }
 
 /**
- * vips_scRGB2BW:
+ * vips_scRGB2BW: (method)
  * @in: input image
- * @out: output image
+ * @out: (out): output image
  * @...: %NULL-terminated list of optional named arguments
  *
  * Optional arguments:

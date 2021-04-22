@@ -136,6 +136,8 @@ vips_complex_hypot( double a, double b )
 {
 	double d;
 
+	/* hypot() is less sensitive to overflow. Use it if we can.
+	 */
 #ifdef HAVE_HYPOT
 	d = hypot( a, b ); 
 #else
@@ -150,6 +152,9 @@ vips_complex_atan2( double a, double b )
 {
 	double h;
 
+	/* atan2() is very slow, but is better behaved when a is near 0. Use
+	 * it in preference when we can.
+	 */
 #ifdef HAVE_ATAN2
 	h = VIPS_DEG( atan2( b, a ) );
 	if( h < 0.0 )
@@ -272,9 +277,9 @@ vips_complexv( VipsImage *in, VipsImage **out,
 }
 
 /**
- * vips_complex:
+ * vips_complex: (method)
  * @in: input #VipsImage
- * @out: output #VipsImage
+ * @out: (out): output #VipsImage
  * @cmplx: complex operation to perform
  * @...: %NULL-terminated list of optional named arguments
  *
@@ -299,9 +304,9 @@ vips_complex( VipsImage *in, VipsImage **out, VipsOperationComplex cmplx, ... )
 }
 
 /**
- * vips_polar:
+ * vips_polar: (method)
  * @in: input #VipsImage
- * @out: output #VipsImage
+ * @out: (out): output #VipsImage
  * @...: %NULL-terminated list of optional named arguments
  *
  * Perform #VIPS_OPERATION_COMPLEX_POLAR on an image. See vips_complex().
@@ -322,9 +327,9 @@ vips_polar( VipsImage *in, VipsImage **out, ... )
 }
 
 /**
- * vips_rect:
+ * vips_rect: (method)
  * @in: input #VipsImage
- * @out: output #VipsImage
+ * @out: (out): output #VipsImage
  * @...: %NULL-terminated list of optional named arguments
  *
  * Perform #VIPS_OPERATION_COMPLEX_RECT on an image. See vips_complex().
@@ -338,16 +343,16 @@ vips_rect( VipsImage *in, VipsImage **out, ... )
 	int result;
 
 	va_start( ap, out );
-	result = vips_complexv( in, out, VIPS_OPERATION_COMPLEX_POLAR, ap );
+	result = vips_complexv( in, out, VIPS_OPERATION_COMPLEX_RECT, ap );
 	va_end( ap );
 
 	return( result );
 }
 
 /**
- * vips_conj:
+ * vips_conj: (method)
  * @in: input #VipsImage
- * @out: output #VipsImage
+ * @out: (out): output #VipsImage
  * @...: %NULL-terminated list of optional named arguments
  *
  * Perform #VIPS_OPERATION_COMPLEX_CONJ on an image. See vips_complex().
@@ -569,7 +574,7 @@ vips_complex2v( VipsImage *left, VipsImage *right, VipsImage **out,
  * vips_complex2:
  * @left: input #VipsImage
  * @right: input #VipsImage
- * @out: output #VipsImage
+ * @out: (out): output #VipsImage
  * @cmplx: complex2 operation to perform
  * @...: %NULL-terminated list of optional named arguments
  *
@@ -598,7 +603,7 @@ vips_complex2( VipsImage *left, VipsImage *right, VipsImage **out,
  * vips_cross_phase:
  * @left: input #VipsImage
  * @right: input #VipsImage
- * @out: output #VipsImage
+ * @out: (out): output #VipsImage
  * @...: %NULL-terminated list of optional named arguments
  *
  * Perform #VIPS_OPERATION_COMPLEX2_CROSS_PHASE on an image. 
@@ -781,9 +786,9 @@ vips_complexgetv( VipsImage *in, VipsImage **out,
 }
 
 /**
- * vips_complexget:
+ * vips_complexget: (method)
  * @in: input #VipsImage
- * @out: output #VipsImage
+ * @out: (out): output #VipsImage
  * @get: complex operation to perform
  * @...: %NULL-terminated list of optional named arguments
  *
@@ -810,9 +815,9 @@ vips_complexget( VipsImage *in, VipsImage **out,
 }
 
 /**
- * vips_real:
+ * vips_real: (method)
  * @in: input #VipsImage
- * @out: output #VipsImage
+ * @out: (out): output #VipsImage
  * @...: %NULL-terminated list of optional named arguments
  *
  * Perform #VIPS_OPERATION_COMPLEXGET_REAL on an image. See vips_complexget().
@@ -834,9 +839,9 @@ vips_real( VipsImage *in, VipsImage **out, ... )
 }
 
 /**
- * vips_imag:
+ * vips_imag: (method)
  * @in: input #VipsImage
- * @out: output #VipsImage
+ * @out: (out): output #VipsImage
  * @...: %NULL-terminated list of optional named arguments
  *
  * Perform #VIPS_OPERATION_COMPLEXGET_IMAG on an image. See vips_complexget().
@@ -977,7 +982,7 @@ vips_complexform_init( VipsComplexform *complexform )
  * vips_complexform:
  * @left: input image 
  * @right: input image 
- * @out: output image
+ * @out: (out): output image
  * @...: %NULL-terminated list of optional named arguments
  *
  * Compose two real images to make a complex image. If either @left or @right 

@@ -7,6 +7,15 @@
 
 . ./variables.sh
 
+# verify that the version number on the wrapper script is correct
+version=$($vips --version)
+major=$(echo $version | cut -b6- | cut -d. -f1)
+minor=$(echo $version | cut -b6- | cut -d. -f2)
+if ! test -f $top_srcdir/tools/vips-$major.$minor; then
+	echo version number in vips wrapper is not correct
+	exit 1
+fi
+
 # is a difference beyond a threshold? return 0 (meaning all ok) or 1 (meaning
 # error, or outside threshold)
 # 
@@ -59,6 +68,23 @@ for i in nearest bicubic bilinear nohalo lbb; do
 	test_rotate $image $i
 done
 
+test_size() {
+	to_test=$1
+	correct_width=$2
+	correct_height=$3
+
+	width=$($vipsheader -f width $to_test)
+	height=$($vipsheader -f height $to_test)
+	if [ $width -ne $correct_width ]; then
+		echo width is $width, not $correct_width
+		exit 1
+	fi
+	if [ $height -ne $correct_height ]; then
+		echo height is $height, not $correct_height
+		exit 1
+	fi
+}
+
 test_thumbnail() {
 	geo=$1
 	correct_width=$2
@@ -66,24 +92,27 @@ test_thumbnail() {
 
 	printf "testing thumbnail -s $geo ... "
 	$vipsthumbnail $image -s "$geo" -o $tmp/t1.jpg
-	width=$(vipsheader -f width $tmp/t1.jpg)
-	height=$(vipsheader -f height $tmp/t1.jpg)
-	if [ $width -ne $correct_width ]; then
-		echo width is $width, not $correct_width
-		exit 1
-	fi
-	if [ $height -ne $correct_height ]; then
-		echo width is $height, not $correct_height
-		exit 1
-	fi
+	test_size $tmp/t1.jpg $correct_width $correct_height
 
 	echo "ok"
 }
 
-test_thumbnail 100 100 75
-test_thumbnail 100x100 100 75
-test_thumbnail x100 133 100
-test_thumbnail "100x100<" 1024 768
-test_thumbnail "2000<" 2000 1500
-test_thumbnail "100x100>" 100 75
-test_thumbnail "2000>" 1024 768
+test_thumbnail 100 66 100
+test_thumbnail 100x100 66 100
+test_thumbnail x100 66 100
+test_thumbnail "100x100<" 290 442
+test_thumbnail "2000<" 1312 2000
+test_thumbnail "100x100>" 66 100
+test_thumbnail "2000>" 290 442
+
+# test thumbnail to and from pipes
+echo -n "testing thumbnail of stdin / stdout ... "
+$vipsthumbnail stdin -s 100 -o $tmp/t1.jpg < $image
+test_size $tmp/t1.jpg 66 100
+cat $image | $vipsthumbnail stdin -s 100 -o $tmp/t1.jpg
+test_size $tmp/t1.jpg 66 100
+cat $image | $vipsthumbnail stdin -s 100 -o .jpg > $tmp/t1.jpg
+test_size $tmp/t1.jpg 66 100
+cat $image | $vipsthumbnail stdin -s 100 -o .jpg | cat > $tmp/t1.jpg
+echo ok
+test_size $tmp/t1.jpg 66 100

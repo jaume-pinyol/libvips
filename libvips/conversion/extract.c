@@ -172,6 +172,14 @@ vips_extract_area_build( VipsObject *object )
 	return( 0 );
 }
 
+#ifdef __EMSCRIPTEN__
+static void
+vips_crop_class_init_adapter( VipsExtractAreaClass *class, void *dummy )
+{
+	vips_extract_area_class_init( class );
+}
+#endif
+
 static void
 vips_extract_area_class_init( VipsExtractAreaClass *class )
 {
@@ -226,15 +234,23 @@ vips_extract_area_class_init( VipsExtractAreaClass *class )
 
 }
 
+#ifdef __EMSCRIPTEN__
+static void
+vips_crop_init_adapter( VipsExtractArea *extract, void *dummy )
+{
+	vips_extract_area_init( extract );
+}
+#endif
+
 static void
 vips_extract_area_init( VipsExtractArea *extract )
 {
 }
 
 /**
- * vips_extract_area:
+ * vips_extract_area: (method)
  * @in: input image
- * @out: output image
+ * @out: (out): output image
  * @left: left edge of area to extract
  * @top: top edge of area to extract
  * @width: width of area to extract
@@ -275,12 +291,20 @@ vips_crop_get_type( void )
 			sizeof( VipsExtractAreaClass ),
 			NULL,           /* base_init */
 			NULL,           /* base_finalize */
+#ifdef __EMSCRIPTEN__
+			(GClassInitFunc) vips_crop_class_init_adapter,
+#else
 			(GClassInitFunc) vips_extract_area_class_init,
+#endif
 			NULL,           /* class_finalize */
 			NULL,           /* class_data */
 			sizeof( VipsExtractArea ),
 			32,             /* n_preallocs */
+#ifdef __EMSCRIPTEN__
+			(GInstanceInitFunc) vips_crop_init_adapter,
+#else
 			(GInstanceInitFunc) vips_extract_area_init,
+#endif
 		};
 
 		type = g_type_register_static( VIPS_TYPE_CONVERSION, 
@@ -291,9 +315,9 @@ vips_crop_get_type( void )
 }
 
 /**
- * vips_crop:
+ * vips_crop: (method)
  * @in: input image
- * @out: output image
+ * @out: (out): output image
  * @left: left edge of area to extract
  * @top: top edge of area to extract
  * @width: width of area to extract
@@ -337,9 +361,10 @@ typedef VipsBandaryClass VipsExtractBandClass;
 G_DEFINE_TYPE( VipsExtractBand, vips_extract_band, VIPS_TYPE_BANDARY );
 
 static void
-vips_extract_band_buffer( VipsBandary *bandary, 
+vips_extract_band_buffer( VipsBandarySequence *seq,
 	VipsPel *out, VipsPel **in, int width )
 {
+	VipsBandary *bandary = seq->bandary;
 	VipsConversion *conversion = (VipsConversion *) bandary;
 	VipsExtractBand *extract = (VipsExtractBand *) bandary;
 	VipsImage *im = bandary->ready[0];
@@ -442,9 +467,9 @@ vips_extract_band_init( VipsExtractBand *extract )
 }
 
 /**
- * vips_extract_band:
+ * vips_extract_band: (method)
  * @in: input image
- * @out: output image
+ * @out: (out): output image
  * @band: band to extract
  * @...: %NULL-terminated list of optional named arguments
  *

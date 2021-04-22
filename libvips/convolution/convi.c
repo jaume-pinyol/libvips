@@ -72,6 +72,12 @@
  * 23/6/16
  * 	- rewritten as a class
  * 	- new fixed-point vector path, up to 2x faster
+ * 2/7/17
+ * 	- remove pts for a small speedup
+ * 12/10/17
+ * 	- fix leak of vectors, thanks MHeimbuc 
+ * 14/10/17
+ * 	- switch to half-float for vector path
  */
 
 /*
@@ -117,15 +123,9 @@
 #include <limits.h>
 
 #include <vips/vips.h>
+#include <vips/internal.h>
 
 #include "pconvolution.h"
-
-/* We do the 8-bit vector path with fixed-point arithmetic. We use 3.5 bits
- * for the mask coefficients, so our range is -4 to +3.99, after using scale
- * on the mask.
- */
-#define FIXED_BITS (5)
-#define FIXED_SCALE (1 << FIXED_BITS)
 
 /* Larger than this and we fall back to C.
  */
@@ -147,9 +147,7 @@ typedef struct {
 typedef struct {
 	VipsConvolution parent_instance;
 
-	/* An int version of M.
-	 */
-	VipsImage *iM;
+	int n_point;		/* w * h for our matrix */
 
 	/* We make a smaller version of the mask with the zeros squeezed out.
 	 */
@@ -157,10 +155,14 @@ typedef struct {
 	int *coeff;		/* Array of non-zero mask coefficients */
 	int *coeff_pos;		/* Index of each nnz element in mask->coeff */
 
-	/* And a fixed-point version for a vector path.
+	/* And a half float version for the vector path. mant has the signed
+	 * 8-bit mantissas in [-1, +1), sexp has the exponent shift after the
+	 * mul and before the add, and exp has the final exponent shift before
+	 * write-back.
 	 */
-	int *fixed;
-	int n_point;		/* Number of points in fixed-point array */
+	int *mant;
+	int sexp;
+	int exp;
 
 	/* The set of passes we need for this mask.
 	 */
@@ -184,7 +186,6 @@ typedef struct {
 	VipsRegion *ir;		/* Input region */
 
 	int *offsets;		/* Offsets for each non-zero matrix element */
-	VipsPel **pts;		/* Per-non-zero mask element image pointers */
 
 	int last_bpl;		/* Avoid recalcing offsets, if we can */
 
@@ -195,6 +196,33 @@ typedef struct {
 	short *t2;
 } VipsConviSequence;
 
+static void
+vips_convi_compile_free( VipsConvi *convi )
+{
+	int i;
+
+	for( i = 0; i < convi->n_pass; i++ )
+		VIPS_FREEF( vips_vector_free, convi->pass[i].vector );
+	convi->n_pass = 0;
+	VIPS_FREEF( vips_vector_free, convi->vector );
+}
+
+static void
+vips_convi_dispose( GObject *gobject )
+{
+	VipsConvi *convi = (VipsConvi *) gobject;
+
+#ifdef DEBUG
+	printf( "vips_convi_dispose: " );
+	vips_object_print_name( VIPS_OBJECT( gobject ) );
+	printf( "\n" );
+#endif /*DEBUG*/
+
+	vips_convi_compile_free( convi ); 
+
+	G_OBJECT_CLASS( vips_convi_parent_class )->dispose( gobject );
+}
+
 /* Free a sequence value.
  */
 static int
@@ -204,7 +232,6 @@ vips_convi_stop( void *vseq, void *a, void *b )
 
 	VIPS_UNREF( seq->ir );
 	VIPS_FREE( seq->offsets );
-	VIPS_FREE( seq->pts );
 	VIPS_FREE( seq->t1 );
 	VIPS_FREE( seq->t2 );
 
@@ -226,7 +253,6 @@ vips_convi_start( VipsImage *out, void *a, void *b )
 	seq->convi = convi;
 	seq->ir = NULL;
 	seq->offsets = NULL;
-	seq->pts = NULL;
 	seq->last_bpl = -1;
 	seq->t1 = NULL;
 	seq->t2 = NULL;
@@ -236,11 +262,7 @@ vips_convi_start( VipsImage *out, void *a, void *b )
 	/* C mode.
 	 */
 	if( convi->nnz ) {
-		seq->offsets = VIPS_ARRAY( NULL, convi->nnz, int );
-		seq->pts = VIPS_ARRAY( NULL, convi->nnz, VipsPel * );
-
-		if( !seq->offsets ||
-			!seq->pts ) { 
+		if( !(seq->offsets = VIPS_ARRAY( NULL, convi->nnz, int )) ) { 
 			vips_convi_stop( seq, in, convi );
 			return( NULL );
 		}
@@ -260,17 +282,6 @@ vips_convi_start( VipsImage *out, void *a, void *b )
 	}
 
 	return( (void *) seq );
-}
-
-static void
-vips_convi_compile_free( VipsConvi *convi )
-{
-	int i;
-
-	for( i = 0; i < convi->n_pass; i++ )
-		VIPS_FREEF( vips_vector_free, convi->pass[i].vector );
-	convi->n_pass = 0;
-	VIPS_FREEF( vips_vector_free, convi->vector );
 }
 
 #define TEMP( N, S ) vips_vector_temporary( v, (char *) N, S )
@@ -331,11 +342,13 @@ vips_convi_compile_section( VipsConvi *convi, VipsImage *in, Pass *pass )
 
 		char source[256];
 		char off[256];
+		char rnd[256];
+		char sexp[256];
 		char coeff[256];
 
 		/* Exclude zero elements.
 		 */
-		if( !convi->fixed[i] )
+		if( !convi->mant[i] )
 			continue;
 
 		/* The source. sl0 is the first scanline in the mask.
@@ -357,8 +370,15 @@ vips_convi_compile_section( VipsConvi *convi, VipsImage *in, Pass *pass )
 		 * of the image and coefficient are interesting, so we can take
 		 * the bottom half of a 16x16->32 multiply. 
 		 */
-		CONST( coeff, convi->fixed[i], 2 );
+		CONST( coeff, convi->mant[i], 2 );
 		ASM3( "mullw", "value", "value", coeff );
+
+		/* Shift right before add to prevent overflow on large masks.
+		 */
+		CONST( sexp, convi->sexp, 2 );
+		CONST( rnd, 1 << (convi->sexp - 1), 2 );
+		ASM3( "addw", "value", "value", rnd );
+		ASM3( "shrsw", "value", "value", sexp );
 
 		/* We accumulate the signed 16-bit result in sum. Saturated
 		 * add. 
@@ -398,8 +418,8 @@ vips_convi_compile_clip( VipsConvi *convi )
 	int offset = VIPS_RINT( vips_image_get_offset( M ) );
 
 	VipsVector *v;
-	char c16[256];
-	char c5[256];
+	char rnd[256];
+	char exp[256];
 	char c0[256];
 	char c255[256];
 	char off[256];
@@ -414,10 +434,10 @@ vips_convi_compile_clip( VipsConvi *convi )
 	 */
 	TEMP( "value", 2 );
 
-	CONST( c16, 16, 2 );
-	ASM3( "addw", "value", "r", c16 );
-	CONST( c5, 5, 2 );
-	ASM3( "shrsw", "value", "value", c5 );
+	CONST( rnd, 1 << (convi->exp - 1), 2 );
+	ASM3( "addw", "value", "r", rnd );
+	CONST( exp, convi->exp, 2 );
+	ASM3( "shrsw", "value", "value", exp );
 
 	CONST( off, offset, 2 ); 
 	ASM3( "addw", "value", "value", off );
@@ -568,8 +588,9 @@ vips_convi_gen_vector( VipsRegion *or,
 /* INT inner loops.
  */
 #define CONV_INT( TYPE, CLIP ) { \
-	TYPE ** restrict p = (TYPE **) seq->pts; \
+	TYPE * restrict p = (TYPE *) VIPS_REGION_ADDR( ir, le, y ); \
 	TYPE * restrict q = (TYPE *) VIPS_REGION_ADDR( or, le, y ); \
+	int * restrict offsets = seq->offsets; \
 	\
 	for( x = 0; x < sz; x++ ) {  \
 		int sum; \
@@ -577,21 +598,23 @@ vips_convi_gen_vector( VipsRegion *or,
 		\
 		sum = 0; \
 		for ( i = 0; i < nnz; i++ ) \
-			sum += t[i] * p[i][x]; \
+			sum += t[i] * p[offsets[i]]; \
 		\
 		sum = ((sum + rounding) / scale) + offset; \
 		\
 		CLIP; \
 		\
 		q[x] = sum;  \
+		p += 1; \
 	}  \
 } 
 
 /* FLOAT inner loops.
  */
 #define CONV_FLOAT( TYPE ) { \
-	TYPE ** restrict p = (TYPE **) seq->pts; \
+	TYPE * restrict p = (TYPE *) VIPS_REGION_ADDR( ir, le, y ); \
 	TYPE * restrict q = (TYPE *) VIPS_REGION_ADDR( or, le, y ); \
+	int * restrict offsets = seq->offsets; \
 	\
 	for( x = 0; x < sz; x++ ) {  \
 		double sum; \
@@ -599,11 +622,12 @@ vips_convi_gen_vector( VipsRegion *or,
 		\
 		sum = 0; \
 		for ( i = 0; i < nnz; i++ ) \
-			sum += t[i] * p[i][x]; \
+			sum += t[i] * p[offsets[i]]; \
  		\
 		sum = (sum / scale) + offset; \
 		\
 		q[x] = sum;  \
+		p += 1; \
 	}  \
 } 
 
@@ -691,20 +715,15 @@ vips_convi_gen( VipsRegion *or,
 			y = z / M->Xsize;
 
 			seq->offsets[i] = 
-				VIPS_REGION_ADDR( ir, x + le, y + to ) -
-				VIPS_REGION_ADDR( ir, le, to );
+				(VIPS_REGION_ADDR( ir, x + le, y + to ) -
+				 VIPS_REGION_ADDR( ir, le, to )) / 
+					VIPS_IMAGE_SIZEOF_ELEMENT( ir->im ); 
 		}
 	}
 
 	VIPS_GATE_START( "vips_convi_gen: work" ); 
 
 	for( y = to; y < bo; y++ ) { 
-		/* Init pts for this line of PELs.
-		 */
-		for( z = 0; z < nnz; z++ )
-			seq->pts[z] = seq->offsets[z] +
-				VIPS_REGION_ADDR( ir, le, y ); 
-
 		switch( in->BandFmt ) {
 		case VIPS_FORMAT_UCHAR: 	
 			CONV_INT( unsigned char, CLIP_UCHAR( sum ) ); 
@@ -823,82 +842,144 @@ vips__image_intize( VipsImage *in, VipsImage **out )
 	return( 0 );
 }
 
-/* Make an int version of a mask.
- *
- * This makes a fixed-point version ready for the vector path: instead of an 
- * output scale, we have x.y for each element.
+/* Make an int version of a mask. Each element is 8.8 float, with the same
+ * exponent for each element (so just 8 bits in @out).
  *
  * @out is a w x h int array.
  */
 static int
-intize_to_fixed_point( VipsImage *in, int *out )
+vips_convi_intize( VipsConvi *convi, VipsImage *M )
 {
 	VipsImage *t;
 	double scale;
-	int ne;
 	double *scaled;
-	double total_error;
+	double mx;
+	double mn;
+	int shift;
 	int i;
 
-	if( vips_check_matrix( "vips2imask", in, &t ) )
+	if( vips_check_matrix( "vips2imask", M, &t ) )
 		return( -1 ); 
 
-	/* Bake the scale into the mask.
+	/* Bake the scale into the mask to make a double version.
 	 */
 	scale = vips_image_get_scale( t );
-	ne = t->Xsize * t->Ysize; 
-        if( !(scaled = VIPS_ARRAY( in, ne, double )) ) {
+        if( !(scaled = VIPS_ARRAY( convi, convi->n_point, double )) ) {
 		g_object_unref( t ); 
 		return( -1 );
 	}
-	for( i = 0; i < ne; i++ ) 
+	for( i = 0; i < convi->n_point; i++ ) 
 		scaled[i] = VIPS_MATRIX( t, 0, 0 )[i] / scale;
 	g_object_unref( t ); 
-
-	/* The scaled mask must fit in 3.5 bits, so we can handle -4 to +3.99
-	 */
-	for( i = 0; i < ne; i++ ) 
-		if( scaled[i] >= 4.0 ||
-			scaled[i] < -4 ) {
-			g_info( "intize_to_fixed_point: "
-				"out of range for vector path" );
-			return( -1 ); 
-		}
-
-	/* The smallest coefficient we can manage is 1/32nd, we'll just turn
-	 * that into zero.
-	 *
-	 * Find the total error we'll get by rounding down to zero and bail if
-	 * it's significant.
-	 */
-	total_error = 0.0;
-	for( i = 0; i < ne; i++ ) 
-		if( scaled[i] != 0.0 &&
-			VIPS_FABS( scaled[i] ) < 1.0 / FIXED_SCALE ) 
-			total_error += VIPS_FABS( scaled[i] ); 
-
-	/* 0.1 is a 10% error.
-	 */
-	if( total_error > 0.1 ) {
-		g_info( "intize_to_fixed_point: too many underflows" );
-		return( -1 ); 
-	}
-
-	vips_vector_to_fixed_point( scaled, out, ne, FIXED_SCALE );
 
 #ifdef DEBUG_COMPILE
 {
 	int x, y;
 
-	printf( "intize_to_fixed_point:\n" ); 
+	printf( "vips_convi_intize: double version\n" ); 
 	for( y = 0; y < t->Ysize; y++ ) {
 		printf( "\t" ); 
 		for( x = 0; x < t->Xsize; x++ ) 
-			printf( "%4d ", out[y * t->Xsize + x] ); 
+			printf( "%g ", scaled[y * t->Xsize + x] ); 
 		printf( "\n" ); 
 	}
 }
 #endif /*DEBUG_COMPILE*/
+
+	mx = scaled[0];
+	mn = scaled[0];
+	for( i = 1; i < convi->n_point; i++ ) {
+		if( scaled[i] > mx )
+			mx = scaled[i];
+		if( scaled[i] < mn )
+			mn = scaled[i];
+	}
+
+	/* The mask max rounded up to the next power of two gives the exponent
+	 * all elements share. Values are eg. -3 for 1/8, 3 for 8.
+	 *
+	 * Add one so we round up stuff exactly on x.0. We multiply by 128
+	 * later, so 1.0 (for example) would become 128, which is outside
+	 * signed 8 bit. 
+	 */
+	shift = ceil( log2( mx ) + 1 );
+
+	/* We need to sum n_points, so we have to shift right before adding a
+	 * new value to make sure we have enough range. 
+	 */
+	convi->sexp = ceil( log2( convi->n_point ) );
+	if( convi->sexp > 10 ) {
+		g_info( "vips_convi_intize: mask too large" ); 
+		return( -1 ); 
+	}
+
+	/* With that already done, the final shift must be ...
+	 */
+	convi->exp = 7 - shift - convi->sexp;
+
+	if( !(convi->mant = VIPS_ARRAY( convi, convi->n_point, int )) )
+		return( -1 );
+	for( i = 0; i < convi->n_point; i++ ) {
+		/* 128 since this is signed. 
+		 */
+		convi->mant[i] = VIPS_RINT( 128 * scaled[i] * pow(2, -shift) );
+
+		if( convi->mant[i] < -128 ||
+			convi->mant[i] > 127 ) {
+			g_info( "vips_convi_intize: mask range too large" ); 
+			return( -1 );
+		}
+	}
+
+#ifdef DEBUG_COMPILE
+{
+	int x, y;
+
+	printf( "vips_convi_intize:\n" ); 
+	printf( "sexp = %d\n", convi->sexp ); 
+	printf( "exp = %d\n", convi->exp ); 
+	for( y = 0; y < t->Ysize; y++ ) {
+		printf( "\t" ); 
+		for( x = 0; x < t->Xsize; x++ ) 
+			printf( "%4d ", convi->mant[y * t->Xsize + x] ); 
+		printf( "\n" ); 
+	}
+}
+#endif /*DEBUG_COMPILE*/
+
+	/* Verify accuracy.
+	 */
+{
+	double true_sum;
+	int int_sum;
+	int true_value;
+	int int_value;
+
+	true_sum = 0.0;
+	int_sum = 0;
+	for( i = 0; i < convi->n_point; i++ ) {
+		int value;
+
+		true_sum += 128 * scaled[i];
+		value = 128 * convi->mant[i];
+		value = (value + (1 << (convi->sexp - 1))) >> convi->sexp;
+		int_sum += value;
+		int_sum = VIPS_CLIP( SHRT_MIN, int_sum, SHRT_MAX ); 
+	}
+
+	true_value = VIPS_CLIP( 0, true_sum, 255 ); 
+
+	if( convi->exp > 0 )
+		int_value = (int_sum + (1 << (convi->exp - 1))) >> convi->exp;
+	else
+		int_value = VIPS_LSHIFT_INT( int_sum, convi->exp );
+	int_value = VIPS_CLIP( 0, int_value, 255 ); 
+
+	if( VIPS_ABS( true_value - int_value ) > 2 ) {
+		g_info( "vips_convi_intize: too inaccurate" );
+		return( -1 ); 
+	}
+}
 
 	return( 0 );
 }
@@ -912,7 +993,6 @@ vips_convi_build( VipsObject *object )
 
 	VipsImage *in;
 	VipsImage *M;
-	int n_point;
 	VipsGenerateFn generate;
 	double *coeff;
         int i;
@@ -922,7 +1002,7 @@ vips_convi_build( VipsObject *object )
 
 	in = convolution->in;
 	M = convolution->M;
-	convi->n_point = n_point = M->Xsize * M->Ysize;
+	convi->n_point = M->Xsize * M->Ysize;
 
 	if( vips_embed( in, &t[0], 
 		M->Xsize / 2, M->Ysize / 2, 
@@ -940,11 +1020,10 @@ vips_convi_build( VipsObject *object )
 	 */
 	if( vips_vector_isenabled() &&
 		in->BandFmt == VIPS_FORMAT_UCHAR ) {
-		if( (convi->fixed = VIPS_ARRAY( object, n_point, int )) &&
-			!intize_to_fixed_point( M, convi->fixed ) &&
+		if( !vips_convi_intize( convi, M ) &&
 			!vips_convi_compile( convi, in ) ) {
 			generate = vips_convi_gen_vector;
-			g_info( "using vector path" ); 
+			g_info( "convi: using vector path" ); 
 		}
 		else
 			vips_convi_compile_free( convi );
@@ -953,22 +1032,24 @@ vips_convi_build( VipsObject *object )
 	/* Make the data for the C path.
 	 */
 	if( generate == vips_convi_gen ) { 
-		g_info( "using C path" ); 
+		g_info( "convi: using C path" ); 
 
 		/* Make an int version of our mask.
 		 */
 		if( vips__image_intize( M, &t[1] ) )
 			return( -1 ); 
-		convi->iM = M = t[1];
+		M = t[1];
 
 		coeff = VIPS_MATRIX( M, 0, 0 ); 
-		if( !(convi->coeff = VIPS_ARRAY( object, n_point, int )) ||
-			!(convi->coeff_pos = VIPS_ARRAY( object, n_point, int )) )
+		if( !(convi->coeff = VIPS_ARRAY( object, convi->n_point, int )) ||
+			!(convi->coeff_pos = 
+				VIPS_ARRAY( object, convi->n_point, int )) )
 			return( -1 );
 
 		/* Squeeze out zero mask elements. 
 		 */
-		for( i = 0; i < n_point; i++ )
+		convi->nnz = 0;
+		for( i = 0; i < convi->n_point; i++ )
 			if( coeff[i] ) {
 				convi->coeff[convi->nnz] = coeff[i];
 				convi->coeff_pos[convi->nnz] = i;
@@ -1009,7 +1090,10 @@ vips_convi_build( VipsObject *object )
 static void
 vips_convi_class_init( VipsConviClass *class )
 {
+	GObjectClass *gobject_class = G_OBJECT_CLASS( class );
 	VipsObjectClass *object_class = (VipsObjectClass *) class;
+
+	gobject_class->dispose = vips_convi_dispose;
 
 	object_class->nickname = "convi";
 	object_class->description = _( "int convolution operation" );
@@ -1025,9 +1109,9 @@ vips_convi_init( VipsConvi *convi )
 }
 
 /**
- * vips_convi:
+ * vips_convi: (method)
  * @in: input image
- * @out: output image
+ * @out: (out): output image
  * @mask: convolve with this mask
  * @...: %NULL-terminated list of optional named arguments
  *
@@ -1044,7 +1128,7 @@ vips_convi_init( VipsConvi *convi )
  * The output image always has the same #VipsBandFormat as the input image. 
  *
  * For #VIPS_FORMAT_UCHAR images, vips_convi() uses a fast vector path based on
- * fixed-point arithmetic. This can produce slightly different results. 
+ * half-float arithmetic. This can produce slightly different results. 
  * Disable the vector path with `--vips-novector` or `VIPS_NOVECTOR` or
  * vips_vector_set_enabled().
  *

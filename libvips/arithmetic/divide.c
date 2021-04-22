@@ -13,7 +13,7 @@
  * 19/10/93 JC
  *	- coredump-inducing bug in complex*complex fixed
  * 13/12/93
- *	- char*short bug fixed
+ *	- char * short bug fixed
  * 12/6/95 JC
  *	- new im_multiply adapted to make new im_divide
  * 27/9/04
@@ -238,7 +238,7 @@ vips_divide_init( VipsDivide *divide )
  * vips_divide:
  * @left: input image 
  * @right: input image 
- * @out: output image
+ * @out: (out): output image
  * @...: %NULL-terminated list of optional named arguments
  *
  * This operation calculates @in1 / @in2 and writes the result to @out. If any

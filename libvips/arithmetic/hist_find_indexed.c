@@ -6,6 +6,8 @@
  * 	- gtkdoc
  * 17/8/13
  * 	- redo as a class
+ * 2/11/17
+ * 	- add @combine ... pick a bin combine mode
  */
 
 /*
@@ -60,6 +62,7 @@ typedef struct {
 	int size;		/* Length of bins */
 	int mx;			/* Maximum value we have seen */
 	double *bins;		/* All the bins! */
+	int *init;		/* TRUE for bin has been initialised */
 } Histogram;
 
 typedef struct _VipsHistFindIndexed {
@@ -78,6 +81,10 @@ typedef struct _VipsHistFindIndexed {
 	/* Write hist to this output image.
 	 */
 	VipsImage *out; 
+
+	/* Combine bins with this. 
+	 */
+	VipsCombine combine;
 
 } VipsHistFindIndexed;
 
@@ -102,12 +109,15 @@ histogram_new( VipsHistFindIndexed *indexed )
 		256 : 65536;
 	hist->mx = 0;
 	hist->bins = NULL;
+	hist->init = NULL;
 
 	if( !(hist->bins = VIPS_ARRAY( indexed, bands * hist->size, double )) ||
+		!(hist->init = VIPS_ARRAY( indexed, hist->size, int )) ||
 		!(hist->reg = vips_region_new( indexed->index_ready )) ) 
 		return( NULL );
 
 	memset( hist->bins, 0, bands * hist->size * sizeof( double ) );
+	memset( hist->init, 0, hist->size * sizeof( int ) );
 
 	return( hist );
 }
@@ -196,6 +206,27 @@ vips_hist_find_indexed_start( VipsStatistic *statistic )
 	return( (void *) histogram_new( indexed ) );
 }
 
+/* Combine B with A according to mode. 
+ */
+#define COMBINE( MODE, A, B ) G_STMT_START { \
+	switch( MODE ) { \
+	case VIPS_COMBINE_MAX: \
+		(A) = VIPS_MAX( A, B ); \
+		break; \
+	\
+	case VIPS_COMBINE_SUM: \
+		(A) += (B); \
+		break; \
+	\
+	case VIPS_COMBINE_MIN: \
+		(A) = VIPS_MIN( A, B ); \
+		break; \
+	\
+	default: \
+		g_assert_not_reached(); \
+	} \
+} G_STMT_END
+
 /* Join a sub-hist onto the main hist.
  */
 static int
@@ -206,14 +237,33 @@ vips_hist_find_indexed_stop( VipsStatistic *statistic, void *seq )
 	Histogram *hist = indexed->hist; 
 	int bands = statistic->ready->Bands; 
 
-	int i;
+	int i, j;
+	double *bins;
+	double *sub_bins;
+	int *init;
+	int *sub_init;
 
-	/* Add on sub-data.
-	 */
 	hist->mx = VIPS_MAX( hist->mx, sub_hist->mx );
-	for( i = 0; i < bands * hist->size; i++ ) {
-		hist->bins[i] += sub_hist->bins[i];
-		sub_hist->bins[i] = 0;
+
+	bins = hist->bins;
+	sub_bins = sub_hist->bins;
+	init = hist->init;
+	sub_init = sub_hist->init;
+	for( i = 0; i <= sub_hist->mx; i++ ) {
+		if( sub_init[i] ) {
+			if( init[i] ) 
+				for( j = 0; j < bands; j++ )
+					COMBINE( indexed->combine, 
+						bins[j], sub_bins[j] );
+			else {
+				for( j = 0; j < bands; j++ )
+					bins[j] = sub_bins[j];
+				init[i] = TRUE;
+			}
+		}
+
+		bins += bands;
+		sub_bins += bands;
 	}
 
 	VIPS_UNREF( sub_hist->reg );
@@ -228,10 +278,17 @@ vips_hist_find_indexed_stop( VipsStatistic *statistic, void *seq )
 	TYPE *tv = (TYPE *) in; \
 	\
 	for( x = 0; x < n; x++ ) { \
-		double *bin = hist->bins + i[x] * bands; \
+		int ix = i[x]; \
+		double *bin = hist->bins + ix * bands; \
 		\
-		for( z = 0; z < bands; z++ ) \
-			bin[z] += tv[z]; \
+		if( hist->init[ix] ) \
+			for( z = 0; z < bands; z++ ) \
+				COMBINE( indexed->combine, bin[z], tv[z] ); \
+		else { \
+			for( z = 0; z < bands; z++ ) \
+				bin[z] = tv[z]; \
+			hist->init[ix] = TRUE; \
+		} \
 		\
 		tv += bands; \
 	} \
@@ -287,8 +344,14 @@ vips_hist_find_indexed_uchar_scan( VipsHistFindIndexed *indexed,
 		if( ix > mx ) \
 			mx = ix; \
 		\
-		for( z = 0; z < bands; z++ ) \
-			bin[z] += tv[z]; \
+		if( hist->init[ix] ) \
+			for( z = 0; z < bands; z++ ) \
+				COMBINE( indexed->combine, bin[z], tv[z] ); \
+		else { \
+			for( z = 0; z < bands; z++ ) \
+				bin[z] = tv[z]; \
+			hist->init[ix] = TRUE; \
+		} \
 		\
 		tv += bands; \
 	} \
@@ -393,26 +456,41 @@ vips_hist_find_indexed_class_init( VipsHistFindIndexedClass *class )
 		VIPS_ARGUMENT_REQUIRED_OUTPUT, 
 		G_STRUCT_OFFSET( VipsHistFindIndexed, out ) );
 
+	VIPS_ARG_ENUM( class, "combine", 104, 
+		_( "Combine" ), 
+		_( "Combine bins like this" ), 
+		VIPS_ARGUMENT_OPTIONAL_INPUT, 
+		G_STRUCT_OFFSET( VipsHistFindIndexed, combine ), 
+		VIPS_TYPE_COMBINE, VIPS_COMBINE_SUM ); 
+
 }
 
 static void
-vips_hist_find_indexed_init( VipsHistFindIndexed *hist_find )
+vips_hist_find_indexed_init( VipsHistFindIndexed *indexed )
 {
+	indexed->combine = VIPS_COMBINE_SUM;
 }
 
 /**
- * vips_hist_find_indexed:
- * @in: input image
- * @index: input index image 
- * @out: output image
+ * vips_hist_find_indexed: (method)
+ * @in: input #VipsImage
+ * @index: input index #VipsImage
+ * @out: (out): output image
  * @...: %NULL-terminated list of optional named arguments
  *
+ * Optional arguments:
+ *
+ * * @combine: #VipsCombine, combine bins like this
+ *
  * Make a histogram of @in, but use image @index to pick the bins. In other
- * words, element zero in @out contains the sum of all the pixels in @in
+ * words, element zero in @out contains the combination of all the pixels in @in
  * whose corresponding pixel in @index is zero.
  *
  * @index must have just one band and be u8 or u16. @in must be
  * non-complex. @out always has the same size and format as @in.
+ *
+ * Normally, bins are summed, but you can use @combine to set other combine
+ * modes. 
  *
  * This operation is useful in conjunction with vips_labelregions(). You can
  * use it to find the centre of gravity of blobs in an image, for example.

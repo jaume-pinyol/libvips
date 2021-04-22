@@ -63,11 +63,6 @@ vips_col_ab2h( double a, double b )
 {
 	double h;
 
-#ifdef HAVE_ATAN2
-	h = VIPS_DEG( atan2( b, a ) );
-	if( h < 0.0 )
-		h += 360;
-#else
 	/* We have to get the right quadrant!
 	 */
 	if( a == 0 ) {
@@ -89,7 +84,6 @@ vips_col_ab2h( double a, double b )
 		else
 			h = VIPS_DEG( t + VIPS_PI );
 	}
-#endif
 
 	return( h );
 }
@@ -97,13 +91,7 @@ vips_col_ab2h( double a, double b )
 void
 vips_col_ab2Ch( float a, float b, float *C, float *h )
 {
-#ifdef HAVE_ATAN2
-	*h = VIPS_DEG( atan2( b, a ) );
-	if( *h < 0.0 )
-		*h += 360;
-#else
 	*h = vips_col_ab2h( a, b ); 
-#endif 
 
 #ifdef HAVE_HYPOT
 	*C = hypot( a, b ); 
@@ -160,9 +148,9 @@ vips_Lab2LCh_init( VipsLab2LCh *Lab2LCh )
 }
 
 /**
- * vips_Lab2LCh:
+ * vips_Lab2LCh: (method)
  * @in: input image
- * @out: output image
+ * @out: (out): output image
  * @...: %NULL-terminated list of optional named arguments
  *
  * Turn Lab to LCh.

@@ -372,7 +372,7 @@ vips_convasep_stop( void *vseq, void *a, void *b )
 static void *
 vips_convasep_start( VipsImage *out, void *a, void *b )
 {
-	VipsImage *in = (IMAGE *) a;
+	VipsImage *in = (VipsImage *) a;
 	VipsConvasep *convasep = (VipsConvasep *) b;
 
 	VipsConvasepSeq *seq;
@@ -914,9 +914,9 @@ vips_convasep_init( VipsConvasep *convasep )
 }
 
 /**
- * vips_convasep:
+ * vips_convasep: (method)
  * @in: input image
- * @out: output image
+ * @out: (out): output image
  * @mask: convolve with this mask
  * @...: %NULL-terminated list of optional named arguments
  *

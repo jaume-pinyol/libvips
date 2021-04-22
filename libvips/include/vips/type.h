@@ -74,9 +74,12 @@ typedef struct _VipsArea {
 	int count;
 	GMutex *lock;		
 
-	/* Things like ICC profiles need their own free functions.
+	/* Things like ICC profiles need their own free functions. 
+	 *
+	 * Set client to anything you like -- VipsArea doesn't use this.
 	 */
 	VipsCallbackFn free_fn;
+	void *client;
 
 	/* If we are holding an array (for example, an array of double), the
 	 * GType of the elements and their size. 0 for not known.
@@ -89,6 +92,7 @@ typedef struct _VipsArea {
 } VipsArea;
 
 VipsArea *vips_area_copy( VipsArea *area );
+int vips_area_free_cb( void *mem, VipsArea *area );
 void vips_area_unref( VipsArea *area );
 
 VipsArea *vips_area_new( VipsCallbackFn free_fn, void *data );
@@ -100,7 +104,8 @@ void *vips_area_get_data( VipsArea *area,
 #ifdef VIPS_DEBUG
 #define VIPS_ARRAY_ADDR( X, I ) \
 	(((I) >= 0 && (I) < VIPS_AREA( X )->n) ? \
-	 (VIPS_AREA( X )->data + VIPS_AREA( X )->sizeof_type * (I)) : \
+	 (void *) ((VipsPel *) VIPS_AREA( X )->data + \
+		VIPS_AREA( X )->sizeof_type * (I)) : \
 	 (fprintf( stderr, \
 		"VIPS_ARRAY_ADDR: index out of bounds, " \
 		"file \"%s\", line %d\n" \
@@ -109,7 +114,8 @@ void *vips_area_get_data( VipsArea *area,
 		(I), VIPS_AREA( X )->n ), NULL ))
 #else /*!VIPS_DEBUG*/
 #define VIPS_ARRAY_ADDR( X, I ) \
-	(VIPS_AREA( X )->data + VIPS_AREA( X )->sizeof_type * (I))
+	((void *) \
+	 ((VipsPel *) VIPS_AREA( X )->data + VIPS_AREA( X )->sizeof_type * (I)))
 #endif /*VIPS_DEBUG*/
 
 /**
@@ -156,9 +162,11 @@ typedef struct _VipsBlob {
 } VipsBlob;
 
 VipsBlob *vips_blob_new( VipsCallbackFn free_fn, 
-	const void *data, size_t size );
-VipsBlob *vips_blob_copy( const void *data, size_t size );
-const void *vips_blob_get( VipsBlob *blob, size_t *size );
+	const void *data, size_t length );
+VipsBlob *vips_blob_copy( const void *data, size_t length );
+const void *vips_blob_get( VipsBlob *blob, size_t *length );
+void vips_blob_set( VipsBlob *blob, 
+	VipsCallbackFn free_fn, const void *data, size_t length );
 GType vips_blob_get_type(void);
 
 /**
@@ -222,7 +230,8 @@ void vips_value_set_ref_string( GValue *value, const char *str );
 
 void *vips_value_get_blob( const GValue *value, size_t *length );
 void vips_value_set_blob( GValue *value, 
-	VipsCallbackFn free_fn, void *data, size_t length );
+	VipsCallbackFn free_fn, const void *data, size_t length );
+void vips_value_set_blob_free( GValue *value, void *data, size_t length );
 
 void vips_value_set_array( GValue *value, 
 	int n, GType type, size_t sizeof_type );

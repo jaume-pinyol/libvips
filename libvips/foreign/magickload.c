@@ -10,6 +10,8 @@
  * 	- add @page option, 0 by default
  * 25/11/16
  * 	- add @n, deprecate @all_frames (just sets n = -1)
+ * 8/9/17
+ * 	- don't cache magickload
  */
 
 /*
@@ -56,9 +58,12 @@
 #include <vips/buf.h>
 #include <vips/internal.h>
 
-#ifdef HAVE_MAGICK
+#ifdef ENABLE_MAGICKLOAD
+
+#ifdef HAVE_MAGICK6
 
 #include "pforeign.h"
+#include "magick.h"
 
 typedef struct _VipsForeignLoadMagick {
 	VipsForeignLoad parent_object;
@@ -95,6 +100,7 @@ vips_foreign_load_magick_class_init( VipsForeignLoadMagickClass *class )
 {
 	GObjectClass *gobject_class = G_OBJECT_CLASS( class );
 	VipsObjectClass *object_class = (VipsObjectClass *) class;
+	VipsOperationClass *operation_class = VIPS_OPERATION_CLASS( class );
 	VipsForeignClass *foreign_class = (VipsForeignClass *) class;
 	VipsForeignLoadClass *load_class = (VipsForeignLoadClass *) class;
 
@@ -103,6 +109,10 @@ vips_foreign_load_magick_class_init( VipsForeignLoadMagickClass *class )
 
 	object_class->nickname = "magickload_base";
 	object_class->description = _( "load with ImageMagick" );
+
+	/* Don't cache magickload: it can gobble up memory and disc. 
+	 */
+	operation_class->flags = VIPS_OPERATION_NOCACHE;
 
 	/* We need to be well to the back of the queue since vips's
 	 * dedicated loaders are usually preferable.
@@ -113,28 +123,28 @@ vips_foreign_load_magick_class_init( VipsForeignLoadMagickClass *class )
 		vips_foreign_load_magick_get_flags_filename;
 	load_class->get_flags = vips_foreign_load_magick_get_flags;
 
-	VIPS_ARG_BOOL( class, "all_frames", 3, 
+	VIPS_ARG_BOOL( class, "all_frames", 20, 
 		_( "all_frames" ), 
 		_( "Read all frames from an image" ),
 		VIPS_ARGUMENT_OPTIONAL_INPUT | VIPS_ARGUMENT_DEPRECATED,
 		G_STRUCT_OFFSET( VipsForeignLoadMagick, all_frames ),
 		FALSE );
 
-	VIPS_ARG_STRING( class, "density", 4,
+	VIPS_ARG_STRING( class, "density", 21,
 		_( "Density" ),
 		_( "Canvas resolution for rendering vector formats like SVG" ),
 		VIPS_ARGUMENT_OPTIONAL_INPUT,
 		G_STRUCT_OFFSET( VipsForeignLoadMagick, density ),
 		NULL );
 
-	VIPS_ARG_INT( class, "page", 5,
+	VIPS_ARG_INT( class, "page", 22,
 		_( "Page" ),
 		_( "Load this page from the file" ),
 		VIPS_ARGUMENT_OPTIONAL_INPUT,
 		G_STRUCT_OFFSET( VipsForeignLoadMagick, page ),
 		0, 100000, 0 );
 
-	VIPS_ARG_INT( class, "n", 6,
+	VIPS_ARG_INT( class, "n", 23,
 		_( "n" ),
 		_( "Load this many pages" ),
 		VIPS_ARGUMENT_OPTIONAL_INPUT,
@@ -163,16 +173,13 @@ G_DEFINE_TYPE( VipsForeignLoadMagickFile, vips_foreign_load_magick_file,
 static gboolean
 ismagick( const char *filename )
 {
-	VipsImage *t;
-	int result;
+	/* Fetch up to the first 100 bytes. Hopefully that'll be enough.
+	 */
+	unsigned char buf[100];
+	int len;
 
-	t = vips_image_new();
-	vips_error_freeze();
-	result = vips__magick_read_header( filename, t, NULL, 0, 1 );
-	g_object_unref( t );
-	vips_error_thaw();
-
-	return( result == 0 );
+	return( (len = vips__get_bytes( filename, buf, 100 )) > 10 &&
+		magick_ismagick( buf, len ) );
 }
 
 /* Unfortunately, libMagick does not support header-only reads very well. See
@@ -193,7 +200,8 @@ vips_foreign_load_magick_file_header( VipsForeignLoad *load )
 		magick->n = -1;
 
 	if( vips__magick_read( magick_file->filename, 
-		load->out, magick->density, magick->page, magick->n ) )
+		load->out, magick->density, 
+		magick->page, magick->n ) )
 		return( -1 );
 
 	VIPS_SETSTR( load->out->filename, magick_file->filename );
@@ -248,16 +256,7 @@ G_DEFINE_TYPE( VipsForeignLoadMagickBuffer, vips_foreign_load_magick_buffer,
 static gboolean
 vips_foreign_load_magick_buffer_is_a_buffer( const void *buf, size_t len )
 {
-	VipsImage *t;
-	int result;
-
-	t = vips_image_new();
-	vips_error_freeze();
-	result = vips__magick_read_buffer_header( buf, len, t, NULL, 0, 1 );
-	g_object_unref( t );
-	vips_error_thaw();
-
-	return( result == 0 );
+	return( len > 10 && magick_ismagick( (const unsigned char *) buf, len ) );
 }
 
 /* Unfortunately, libMagick does not support header-only reads very well. See
@@ -279,7 +278,8 @@ vips_foreign_load_magick_buffer_header( VipsForeignLoad *load )
 
 	if( vips__magick_read_buffer( 
 		magick_buffer->buf->data, magick_buffer->buf->length, 
-		load->out, magick->density, magick->page, magick->n ) )
+		load->out, magick->density, magick->page, 
+		magick->n ) )
 		return( -1 );
 
 	return( 0 );
@@ -317,12 +317,14 @@ vips_foreign_load_magick_buffer_init( VipsForeignLoadMagickBuffer *buffer )
 {
 }
 
-#endif /*HAVE_MAGICK*/
+#endif /*HAVE_MAGICK6*/
+
+#endif /*ENABLE_MAGICKLOAD*/
 
 /**
  * vips_magickload:
  * @filename: file to load
- * @out: decompressed image
+ * @out: (out): decompressed image
  * @...: %NULL-terminated list of optional named arguments
  *
  * Optional arguments:
@@ -340,6 +342,9 @@ vips_foreign_load_magick_buffer_init( VipsForeignLoadMagickBuffer *buffer )
  *
  * The reader should also work with most versions of GraphicsMagick. See the
  * "--with-magickpackage" configure option.
+ *
+ * The file format is usually guessed from the filename suffix, or sniffed
+ * from the file contents.
  *
  * Normally it will only load the first image in a many-image sequence (such
  * as a GIF or a PDF). Use @page and @n to set the start page and number of
@@ -369,9 +374,9 @@ vips_magickload( const char *filename, VipsImage **out, ... )
 
 /**
  * vips_magickload_buffer:
- * @buf: memory area to load
+ * @buf: (array length=len) (element-type guint8): memory area to load
  * @len: size of memory area
- * @out: image to write
+ * @out: (out): image to write
  * @...: %NULL-terminated list of optional named arguments
  *
  * Optional arguments:

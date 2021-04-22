@@ -57,7 +57,9 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#ifdef HAVE_UNISTD_H
 #include <unistd.h>
+#endif
 #include <string.h>
 
 #include <vips/vips.h>
@@ -124,11 +126,17 @@ vips_foreign_save_raw_build( VipsObject *object )
 	return( 0 );
 }
 
+static const char *vips_foreign_save_raw_suffs[] = {
+	".raw",
+	NULL
+};
+
 static void
 vips_foreign_save_raw_class_init( VipsForeignSaveRawClass *class )
 {
 	GObjectClass *gobject_class = G_OBJECT_CLASS( class );
 	VipsObjectClass *object_class = (VipsObjectClass *) class;
+	VipsForeignClass *foreign_class = (VipsForeignClass *) class;
 	VipsForeignSaveClass *save_class = (VipsForeignSaveClass *) class;
 
 	gobject_class->dispose = vips_foreign_save_raw_dispose;
@@ -138,6 +146,8 @@ vips_foreign_save_raw_class_init( VipsForeignSaveRawClass *class )
 	object_class->nickname = "rawsave";
 	object_class->description = _( "save image to raw file" );
 	object_class->build = vips_foreign_save_raw_build;
+
+	foreign_class->suffs = vips_foreign_save_raw_suffs;
 
 	save_class->saveable = VIPS_SAVEABLE_ANY;
 
@@ -155,7 +165,7 @@ vips_foreign_save_raw_init( VipsForeignSaveRaw *raw )
 }
 
 /**
- * vips_rawsave:
+ * vips_rawsave: (method)
  * @in: image to save 
  * @filename: file to write to
  * @...: %NULL-terminated list of optional named arguments
@@ -236,6 +246,7 @@ vips_foreign_save_raw_fd_class_init( VipsForeignSaveRawFdClass *class )
 {
 	GObjectClass *gobject_class = G_OBJECT_CLASS( class );
 	VipsObjectClass *object_class = (VipsObjectClass *) class;
+	VipsForeignClass *foreign_class = (VipsForeignClass *) class;
 	VipsForeignSaveClass *save_class = (VipsForeignSaveClass *) class;
 
 	gobject_class->set_property = vips_object_set_property;
@@ -244,6 +255,8 @@ vips_foreign_save_raw_fd_class_init( VipsForeignSaveRawFdClass *class )
 	object_class->nickname = "rawsave_fd";
 	object_class->description = _( "write raw image to file descriptor" );
 	object_class->build = vips_foreign_save_raw_fd_build;
+
+	foreign_class->suffs = vips_foreign_save_raw_suffs;
 
 	save_class->saveable = VIPS_SAVEABLE_ANY;
 
@@ -261,7 +274,7 @@ vips_foreign_save_raw_fd_init( VipsForeignSaveRawFd *fd )
 }
 
 /**
- * vips_rawsave_fd:
+ * vips_rawsave_fd: (method)
  * @in: image to save 
  * @fd: file to write to
  * @...: %NULL-terminated list of optional named arguments

@@ -87,10 +87,10 @@ vips__draw_circle_direct( VipsImage *image, int cx, int cy, int r,
 	d = 3 - 2 * r;
 
 	for( x = 0; x < y; x++ ) {
-		draw_scanline( image, cy + y, cx - x, cx + x, client );
-		draw_scanline( image, cy - y, cx - x, cx + x, client );
-		draw_scanline( image, cy + x, cx - y, cx + y, client );
-		draw_scanline( image, cy - x, cx - y, cx + y, client );
+		draw_scanline( image, cy + y, cx - x, cx + x, 0, client );
+		draw_scanline( image, cy - y, cx - x, cx + x, 1, client );
+		draw_scanline( image, cy + x, cx - y, cx + y, 2, client );
+		draw_scanline( image, cy - x, cx - y, cx + y, 3, client );
 
 		if( d < 0 )
 			d += 4 * x + 6;
@@ -101,10 +101,10 @@ vips__draw_circle_direct( VipsImage *image, int cx, int cy, int r,
 	}
 
 	if( x == y ) {
-		draw_scanline( image, cy + y, cx - x, cx + x, client );
-		draw_scanline( image, cy - y, cx - x, cx + x, client );
-		draw_scanline( image, cy + x, cx - y, cx + y, client );
-		draw_scanline( image, cy - x, cx - y, cx + y, client );
+		draw_scanline( image, cy + y, cx - x, cx + x, 0, client );
+		draw_scanline( image, cy - y, cx - x, cx + x, 1, client );
+		draw_scanline( image, cy + x, cx - y, cx + y, 2, client );
+		draw_scanline( image, cy - x, cx - y, cx + y, 3, client );
 	}
 }
 
@@ -127,7 +127,7 @@ vips_draw_circle_draw_point( VipsImage *image, int x, int y, void *client )
  */
 static void 
 vips_draw_circle_draw_endpoints_clip( VipsImage *image,
-	int y, int x1, int x2, void *client )
+	int y, int x1, int x2, int quadrant, void *client )
 {
 	if( y >= 0 &&
 		y < image->Ysize ) {
@@ -144,7 +144,7 @@ vips_draw_circle_draw_endpoints_clip( VipsImage *image,
  */
 static void 
 vips_draw_circle_draw_endpoints_noclip( VipsImage *image,
-	int y, int x1, int x2, void *client )
+	int y, int x1, int x2, int quadrant, void *client )
 {
 	vips_draw_circle_draw_point( image, x1, y, client );
 	vips_draw_circle_draw_point( image, x2, y, client );
@@ -154,7 +154,7 @@ vips_draw_circle_draw_endpoints_noclip( VipsImage *image,
  */
 static void 
 vips_draw_circle_draw_scanline( VipsImage *image,
-	int y, int x1, int x2, void *client )
+	int y, int x1, int x2, int quadrant, void *client )
 {
 	VipsPel *ink = (VipsPel *) client; 
 	int psize = VIPS_IMAGE_SIZEOF_PEL( image ); 
@@ -274,7 +274,7 @@ vips_draw_circlev( VipsImage *image,
 	VipsArea *area_ink;
 	int result;
 
-	area_ink = (VipsArea *) vips_array_double_new( ink, n );
+	area_ink = VIPS_AREA( vips_array_double_new( ink, n ) );
 	result = vips_call_split( "draw_circle", ap, 
 		image, area_ink, cx, cy, radius );
 	vips_area_unref( area_ink );
@@ -283,7 +283,7 @@ vips_draw_circlev( VipsImage *image,
 }
 
 /**
- * vips_draw_circle:
+ * vips_draw_circle: (method)
  * @image: image to draw on
  * @ink: (array length=n): value to draw
  * @n: length of ink array
@@ -320,7 +320,7 @@ vips_draw_circle( VipsImage *image,
 }
 
 /**
- * vips_draw_circle1:
+ * vips_draw_circle1: (method)
  * @image: image to draw on
  * @ink: value to draw
  * @cx: centre of draw_circle

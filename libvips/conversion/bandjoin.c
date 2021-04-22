@@ -88,8 +88,10 @@ typedef VipsBandaryClass VipsBandjoinClass;
 G_DEFINE_TYPE( VipsBandjoin, vips_bandjoin, VIPS_TYPE_BANDARY );
 
 static void
-vips_bandjoin_buffer( VipsBandary *bandary, VipsPel *q, VipsPel **p, int width )
+vips_bandjoin_buffer( VipsBandarySequence *seq, 
+	VipsPel *q, VipsPel **p, int width )
 {
+	VipsBandary *bandary = seq->bandary;
 	VipsConversion *conversion = (VipsConversion *) bandary;
 	VipsImage **in = bandary->ready;
 
@@ -204,7 +206,7 @@ vips_bandjoinv( VipsImage **in, VipsImage **out, int n, va_list ap )
 /**
  * vips_bandjoin:
  * @in: (array length=n) (transfer none): array of input images
- * @out: output image
+ * @out: (out): output image
  * @n: number of input images
  * @...: %NULL-terminated list of optional named arguments
  *
@@ -243,7 +245,7 @@ vips_bandjoin( VipsImage **in, VipsImage **out, int n, ... )
  * vips_bandjoin2:
  * @in1: first input image
  * @in2: second input image
- * @out: output image
+ * @out: (out): output image
  * @...: %NULL-terminated list of optional named arguments
  *
  * Join a pair of images together, bandwise. See vips_bandjoin().
@@ -296,9 +298,10 @@ vips_bandjoin_const_finalize( GObject *object )
 }
 
 static void
-vips_bandjoin_const_buffer( VipsBandary *bandary, 
+vips_bandjoin_const_buffer( VipsBandarySequence *seq,
 	VipsPel *q, VipsPel **p, int width )
 {
+	VipsBandary *bandary = seq->bandary;
 	VipsConversion *conversion = (VipsConversion *) bandary;
 	VipsBandjoinConst *bandjoin = (VipsBandjoinConst *) bandary;
 	VipsImage *in = bandary->ready[0];
@@ -322,17 +325,35 @@ vips_bandjoin_const_buffer( VipsBandary *bandary,
 	q1 = q;
 	p1 = p[0];
 
-	for( x = 0; x < width; x++ ) {
-		for( z = 0; z < ips; z++ )
-			q1[z] = p1[z];
+	/* Special path for 8-bit RGB -> RGBA ... it's a common case.
+	 */
+	if( ips == 3 &&
+		ebs == 1 ) {
+		int c = bandjoin->c_ready[0];
 
-		p1 += ips;
-		q1 += ips;
+		for( x = 0; x < width; x++ ) {
+			q1[0] = p1[0];
+			q1[1] = p1[1];
+			q1[2] = p1[2];
+			q1[3] = c;
 
-		for( z = 0; z < ebs; z++ )
-			q1[z] = bandjoin->c_ready[z];
+			p1 += 3;
+			q1 += 4;
+		}
+	}
+	else {
+		for( x = 0; x < width; x++ ) {
+			for( z = 0; z < ips; z++ )
+				q1[z] = p1[z];
 
-		q1 += ebs;
+			p1 += ips;
+			q1 += ips;
+
+			for( z = 0; z < ebs; z++ )
+				q1[z] = bandjoin->c_ready[z];
+
+			q1 += ebs;
+		}
 	}
 }
 
@@ -428,9 +449,9 @@ vips_bandjoin_constv( VipsImage *in, VipsImage **out,
 }
 
 /**
- * vips_bandjoin_const:
- * @in: (array length=n) (transfer none): array of input images
- * @out: output image
+ * vips_bandjoin_const: (method)
+ * @in: input image
+ * @out: (out): output image
  * @c: (array length=n): array of constants to append
  * @n: number of constants
  * @...: %NULL-terminated list of optional named arguments
@@ -455,9 +476,9 @@ vips_bandjoin_const( VipsImage *in, VipsImage **out, double *c, int n, ... )
 }
 
 /**
- * vips_bandjoin_const1:
+ * vips_bandjoin_const1: (method)
  * @in: input image
- * @out: output image
+ * @out: (out): output image
  * @c: constant to append
  * @...: %NULL-terminated list of optional named arguments
  *
@@ -476,4 +497,32 @@ vips_bandjoin_const1( VipsImage *in, VipsImage **out, double c, ... )
 	va_end( ap );
 
 	return( result );
+}
+
+/**
+ * vips_addalpha: (method)
+ * @in: input image
+ * @out: (out): output image
+ * @...: %NULL-terminated list of optional named arguments
+ *
+ * Append an alpha channel.
+ *
+ * See also: vips_image_hasalpha().
+ *
+ * Returns: 0 on success, -1 on error
+ */
+int
+vips_addalpha( VipsImage *in, VipsImage **out, ... )
+{
+	double max_alpha;
+
+	max_alpha = 255.0;
+	if( in->Type == VIPS_INTERPRETATION_GREY16 ||
+		in->Type == VIPS_INTERPRETATION_RGB16 )
+		max_alpha = 65535;
+
+	if( vips_bandjoin_const1( in, out, max_alpha, NULL ) )
+		return( -1 );
+
+	return( 0 );
 }

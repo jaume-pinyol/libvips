@@ -1,13 +1,13 @@
-  <refmeta>
-    <refentrytitle>Using `vipsthumbnail`</refentrytitle>
-    <manvolnum>3</manvolnum>
-    <refmiscinfo>libvips</refmiscinfo>
-  </refmeta>
+<refmeta>
+  <refentrytitle>Using `vipsthumbnail`</refentrytitle>
+  <manvolnum>3</manvolnum>
+  <refmiscinfo>libvips</refmiscinfo>
+</refmeta>
 
-  <refnamediv>
-    <refname>`vipsthumbnail`</refname>
-    <refpurpose>Introduction to `vipsthumbnail`, with examples</refpurpose>
-  </refnamediv>
+<refnamediv>
+  <refname>`vipsthumbnail`</refname>
+  <refpurpose>Introduction to `vipsthumbnail`, with examples</refpurpose>
+</refnamediv>
 
 libvips ships with a handy command-line image thumbnailer, `vipsthumbnail`.
 This page introduces it, with some examples. 
@@ -21,6 +21,14 @@ with a libvips binding. For example, from PHP you could write:
 $filename = "image.jpg";
 $image = Vips\Image::thumbnail($filename, 200, ["height" => 200]);
 $image->writeToFile("my-thumbnail.jpg");
+```
+
+You can also call `thumbnail_source` from the CLI, for example:
+
+```
+$ cat k2.jpg | \
+    vips thumbnail_source [descriptor=0] .jpg[Q=90] 128 | \
+    cat > x.jpg
 ```
 
 # libvips options
@@ -81,6 +89,9 @@ is.
 
 You can append `<` or `>` to mean only resize if the image is smaller or larger
 than the target. 
+
+You can append `!` to force a resize to the exact target size, breaking
+the aspect ratio. 
 
 # Cropping
 
@@ -187,7 +198,7 @@ You can give options to the image write operation as a list of comma-separated
 arguments in square brackets. For example:
 
 ```
-$ vipsthumbnail fred.jpg ../jim.tif -o > tn_%s.jpg[Q=90,optimize_coding]
+$ vipsthumbnail fred.jpg ../jim.tif -o tn_%s.jpg[Q=90,optimize_coding]
 ```
 
 will write jpeg images with quality 90, and will turn on the libjpeg coding
@@ -264,27 +275,28 @@ $ ls -l tn_shark.jpg
 -rw-r–r– 1 john john 7295 Nov  9 14:33 tn_shark.jpg
 ```
 
-Now encode with sRGB and delete any embedded profile:
+Now transform to sRGB and don't attach a profile (you can also use `strip`,
+though that will remove *all* metadata from the image):
 
 ```
-$ vipsthumbnail shark.jpg --eprofile /usr/share/color/icc/sRGB.icc --delete
+$ vipsthumbnail shark.jpg --export-profile srgb -o tn_shark.jpg[profile=none]
 $ ls -l tn_shark.jpg 
 -rw-r–r– 1 john john 4229 Nov  9 14:33 tn_shark.jpg
 ```
 
-It’ll look identical to a user, but be almost half the size. 
+(You can use the filename of any RGB profile. The magic string `srgb` selects a
+high-quality sRGB profile that's built into libvips.)
+
+`tn_shark.jpg` will look identical to a user, but it's almost half the size. 
 
 You can also specify a fallback input profile to use if the image has no
-embedded one, but this is less useful.
+embedded one. For example, perhaps you somehow know that a JPG is in Adobe98
+space, even though it has no embedded profile. 
 
-# Auto-rotate
 
-Many JPEG files have a hint set in the header giving the image orientation. If
-you strip out the metadata, this hint will be lost, and the image will appear
-to be rotated. 
-
-If you use the `--rotate` option, `vipsthumbnail` examines the image header and
-if there's an orientation tag, applies and removes it. 
+```
+$ vipsthumbnail kgdev.jpg --input-profile /my/profiles/a98.icm 
+```
 
 # Final suggestion
 
@@ -293,7 +305,6 @@ Putting all this together, I suggest this as a sensible set of options:
 ```
 $ vipsthumbnail fred.jpg \
     --size 128 \
-    -o tn_%s.jpg[optimize_coding,strip] \
-    --eprofile /usr/share/color/icc/sRGB.icc \
-    --rotate
+    --export-profile srgb \
+    -o tn_%s.jpg[optimize_coding,strip] 
 ```

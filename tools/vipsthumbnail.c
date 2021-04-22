@@ -92,6 +92,19 @@
  * 	- support VipSize restrictions
  * 4/5/17
  * 	- add ! geo modifier
+ * 30/8/17
+ * 	- add --intent
+ * 23/10/17
+ * 	- --size Nx didn't work, argh ... thanks jrochkind 
+ * 3/2/20
+ * 	- add --no-rotate
+ * 	- add --import-profile / --export-profile names
+ * 	- back to -o for output
+ * 29/2/20
+ * 	- deprecate --delete
+ * 2/10/20
+ * 	- support "stdin" as a magic input filename for thumbnail_source
+ * 	- support ".suffix" as a magic ouput format for stdout write
  */
 
 #ifdef HAVE_CONFIG_H
@@ -120,38 +133,36 @@ static VipsSize size_restriction = VIPS_SIZE_BOTH;
 static char *output_format = "tn_%s.jpg";
 static char *export_profile = NULL;
 static char *import_profile = NULL;
-static gboolean delete_profile = FALSE;
 static gboolean linear_processing = FALSE;
 static gboolean crop_image = FALSE;
+static gboolean no_rotate_image = FALSE;
 static char *smartcrop_image = NULL;
-static gboolean rotate_image = FALSE;
+static char *thumbnail_intent = NULL;
 
 /* Deprecated and unused.
  */
+static gboolean delete_profile = FALSE;
 static gboolean nosharpen = FALSE;
 static gboolean nodelete_profile = FALSE;
 static gboolean verbose = FALSE;
 static char *convolution_mask = NULL;
 static char *interpolator = NULL;
+static gboolean rotate_image = FALSE;
 
 static GOptionEntry options[] = {
 	{ "size", 's', 0, 
 		G_OPTION_ARG_STRING, &thumbnail_size, 
 		N_( "shrink to SIZE or to WIDTHxHEIGHT" ), 
 		N_( "SIZE" ) },
-	{ "output", 'o', G_OPTION_FLAG_HIDDEN, 
+	{ "output", 'o', 0, 
 		G_OPTION_ARG_STRING, &output_format, 
-		N_( "set output to FORMAT" ), 
+		N_( "output to FORMAT" ), 
 		N_( "FORMAT" ) },
-	{ "format", 'f', 0, 
-		G_OPTION_ARG_STRING, &output_format, 
-		N_( "set output format string to FORMAT" ), 
-		N_( "FORMAT" ) },
-	{ "eprofile", 'e', 0, 
+	{ "export-profile", 'e', 0, 
 		G_OPTION_ARG_FILENAME, &export_profile, 
 		N_( "export with PROFILE" ), 
 		N_( "PROFILE" ) },
-	{ "iprofile", 'i', 0, 
+	{ "import-profile", 'i', 0, 
 		G_OPTION_ARG_FILENAME, &import_profile, 
 		N_( "import untagged images with PROFILE" ), 
 		N_( "PROFILE" ) },
@@ -162,13 +173,32 @@ static GOptionEntry options[] = {
 		G_OPTION_ARG_STRING, &smartcrop_image, 
 		N_( "shrink and crop to fill SIZE using STRATEGY" ), 
 		N_( "STRATEGY" ) },
-	{ "rotate", 't', 0, 
-		G_OPTION_ARG_NONE, &rotate_image, 
-		N_( "auto-rotate" ), NULL },
-	{ "delete", 'd', 0, 
+	{ "intent", 'n', 0, 
+		G_OPTION_ARG_STRING, &thumbnail_intent, 
+		N_( "ICC transform with INTENT" ), 
+		N_( "INTENT" ) },
+	{ "delete", 'd', G_OPTION_FLAG_HIDDEN, 
 		G_OPTION_ARG_NONE, &delete_profile, 
-		N_( "delete profile from exported image" ), NULL },
+		N_( "(deprecated, does nothing)" ), NULL },
+	{ "no-rotate", 0, 0, 
+		G_OPTION_ARG_NONE, &no_rotate_image, 
+		N_( "don't auto-rotate" ), NULL },
 
+	{ "format", 'f', G_OPTION_FLAG_HIDDEN, 
+		G_OPTION_ARG_STRING, &output_format, 
+		N_( "set output format string to FORMAT" ), 
+		N_( "FORMAT" ) },
+	{ "eprofile", 0, G_OPTION_FLAG_HIDDEN, 
+		G_OPTION_ARG_FILENAME, &export_profile, 
+		N_( "export with PROFILE" ), 
+		N_( "PROFILE" ) },
+	{ "iprofile", 0, G_OPTION_FLAG_HIDDEN, 
+		G_OPTION_ARG_FILENAME, &import_profile, 
+		N_( "import untagged images with PROFILE" ), 
+		N_( "PROFILE" ) },
+	{ "rotate", 't', G_OPTION_FLAG_HIDDEN, 
+		G_OPTION_ARG_NONE, &rotate_image, 
+		N_( "(deprecated, does nothing)" ), NULL },
 	{ "crop", 'c', G_OPTION_FLAG_HIDDEN, 
 		G_OPTION_ARG_NONE, &crop_image, 
 		N_( "(deprecated, crop exactly to SIZE)" ), NULL },
@@ -192,9 +222,11 @@ static GOptionEntry options[] = {
 
 /* Given (eg.) "/poop/somefile.png", write @im to the thumbnail name,
  * (eg.) "/poop/tn_somefile.jpg".
+ *
+ * If 
  */
 static int
-thumbnail_write( VipsObject *process, VipsImage *im, const char *filename )
+thumbnail_write_file( VipsObject *process, VipsImage *im, const char *filename )
 {
 	char *file;
 	char *p;
@@ -241,40 +273,103 @@ thumbnail_write( VipsObject *process, VipsImage *im, const char *filename )
 }
 
 static int
-thumbnail_process( VipsObject *process, const char *filename )
+thumbnail_process( VipsObject *process, const char *name )
 {
 	VipsInteresting interesting;
 	VipsImage *image;
+	VipsIntent intent;
+	char filename[VIPS_PATH_MAX];
+	char option_string[VIPS_PATH_MAX];
 
 	interesting = VIPS_INTERESTING_NONE;
 	if( crop_image )
 		interesting = VIPS_INTERESTING_CENTRE;
 	if( smartcrop_image ) {
 		int n;
-		
+
 		if( (n = vips_enum_from_nick( "vipsthumbnail", 
 			VIPS_TYPE_INTERESTING, smartcrop_image )) < 0 ) 
 			return( -1 ); 
 		interesting = n;
 	}
 
-	if( vips_thumbnail( filename, &image, thumbnail_width, 
-		"height", thumbnail_height, 
-		"size", size_restriction, 
-		"auto_rotate", rotate_image, 
-		"crop", interesting, 
-		"linear", linear_processing, 
-		"import_profile", import_profile, 
-		"export_profile", export_profile, 
-		NULL ) )
-		return( -1 );
+	intent = VIPS_INTENT_RELATIVE;
+	if( thumbnail_intent ) {
+		int n;
 
-	if( thumbnail_write( process, image, filename ) ) {
-		g_object_unref( image ); 
-		return( -1 );
+		if( (n = vips_enum_from_nick( "vipsthumbnail", 
+			VIPS_TYPE_INTENT, thumbnail_intent )) < 0 ) 
+			return( -1 ); 
+		intent = n;
 	}
 
-	g_object_unref( image ); 
+	vips__filename_split8( name, filename, option_string );
+	if( strcmp( filename, "stdin" ) == 0 ) {
+		VipsSource *source;
+
+		if( !(source = 
+			vips_source_new_from_descriptor( 0 )) )
+			return( -1 );
+
+		if( vips_thumbnail_source( source, &image, thumbnail_width, 
+			"option-string", option_string, 
+			"height", thumbnail_height, 
+			"size", size_restriction, 
+			"no-rotate", no_rotate_image, 
+			"crop", interesting, 
+			"linear", linear_processing, 
+			"import-profile", import_profile, 
+			"export-profile", export_profile, 
+			"intent", intent, 
+			NULL ) ) {
+			VIPS_UNREF( source );
+			return( -1 );
+		}
+		VIPS_UNREF( source );
+	}
+	else {
+		if( vips_thumbnail( name, &image, thumbnail_width, 
+			"height", thumbnail_height, 
+			"size", size_restriction, 
+			"no-rotate", no_rotate_image, 
+			"crop", interesting, 
+			"linear", linear_processing, 
+			"import-profile", import_profile, 
+			"export-profile", export_profile, 
+			"intent", intent, 
+			NULL ) )
+			return( -1 );
+	}
+
+	/* If the output format is something like ".jpg", we write to stdout
+	 * instead. 
+	 *
+	 * (but allow "./%s.jpg" as a output format)
+	 */
+	if( vips_isprefix( ".", output_format ) &&
+		!vips_isprefix( "./", output_format ) ) {
+		VipsTarget *target;
+
+		if( !(target = vips_target_new_to_descriptor( 1 )) )
+			return( -1 );
+
+		if( vips_image_write_to_target( image, 
+			output_format, target, NULL ) ) {
+			VIPS_UNREF( image ); 
+			VIPS_UNREF( target );
+			return( -1 );
+		}
+
+		VIPS_UNREF( target );
+	}
+	else {
+		if( thumbnail_write_file( process, image, name ) ) {
+			VIPS_UNREF( image ); 
+			return( -1 );
+		}
+	}
+
+	VIPS_UNREF( image ); 
 
 	return( 0 );
 }
@@ -292,6 +387,7 @@ thumbnail_parse_geometry( const char *geometry )
 	 */
 
 	const char *p;
+	gboolean had_x;
 
 	/* w or h missing means replace with a huuuge value to prevent 
 	 * reduction or enlargement in that axis.
@@ -306,13 +402,8 @@ thumbnail_parse_geometry( const char *geometry )
 	while( isspace( *p ) )
 		p++;
 	if( isdigit ( *p ) ) {
-		/* We have a number! vipsthumbnail history means that "-s 200"
-		 * means "200x200", not "200xhuge"
-		 */
-		thumbnail_width = thumbnail_height = atoi( p );
+		thumbnail_width = atoi( p );
 
-		/* And skip over it.
-		 */
 		while( isdigit( *p ) )
 			p++;
 	}
@@ -321,8 +412,11 @@ thumbnail_parse_geometry( const char *geometry )
 	 */
 	while( isspace( *p ) )
 		p++;
-	if( *p == 'x' ) 
+	had_x = FALSE;
+	if( *p == 'x' ) {
 		p += 1;
+		had_x = TRUE;
+	}
 	while( isspace( *p ) )
 		p++;
 
@@ -351,6 +445,12 @@ thumbnail_parse_geometry( const char *geometry )
 		vips_error( "thumbnail", "%s", _( "bad geometry spec" ) ); 
 		return( -1 );
 	}
+
+	/* If there was no 'x' we have just width. vipsthumbnail history means
+	 * this is a square bounding box.
+	 */
+	if( !had_x ) 
+		thumbnail_height = thumbnail_width;
 
 	/* If force is set and one of width or height isn't set, copy from the
 	 * one that is.
@@ -400,9 +500,9 @@ main( int argc, char **argv )
 	/* On Windows, argv is ascii-only .. use this to get a utf-8 version of
 	 * the args.
 	 */
-#ifdef HAVE_G_WIN32_GET_COMMAND_LINE
+#ifdef G_OS_WIN32
 	argv = g_win32_get_command_line();
-#endif /*HAVE_G_WIN32_GET_COMMAND_LINE*/
+#endif /*G_OS_WIN32*/
 
         context = g_option_context_new( _( "- thumbnail generator" ) );
 
@@ -412,11 +512,11 @@ main( int argc, char **argv )
 	g_option_group_set_translation_domain( main_group, GETTEXT_PACKAGE );
 	g_option_context_set_main_group( context, main_group );
 
-#ifdef HAVE_G_WIN32_GET_COMMAND_LINE
+#ifdef G_OS_WIN32
 	if( !g_option_context_parse_strv( context, &argv, &error ) ) 
-#else /*!HAVE_G_WIN32_GET_COMMAND_LINE*/
+#else /*!G_OS_WIN32*/
 	if( !g_option_context_parse( context, &argc, &argv, &error ) ) 
-#endif /*HAVE_G_WIN32_GET_COMMAND_LINE*/
+#endif /*G_OS_WIN32*/
 	{
 		if( error ) {
 			fprintf( stderr, "%s\n", error->message );
@@ -463,9 +563,9 @@ main( int argc, char **argv )
 
 	/* We don't free this on error exit, sadly.
 	 */
-#ifdef HAVE_G_WIN32_GET_COMMAND_LINE
+#ifdef G_OS_WIN32
 	g_strfreev( argv ); 
-#endif /*HAVE_G_WIN32_GET_COMMAND_LINE*/
+#endif /*G_OS_WIN32*/
 
 	vips_shutdown();
 

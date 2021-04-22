@@ -5,6 +5,8 @@
  * 8/5/17
  *      - default to float ... int will often lose precision and should not be
  *        the default
+ * 2/11/17
+ * 	- add MIN mode
  */
 
 /*
@@ -116,6 +118,14 @@ vips_compass_build( VipsObject *object )
 		x = combine[0];
 		break;
 
+	case VIPS_COMBINE_MIN:
+		if( vips_bandrank( abs, &combine[0], compass->times,
+			"index", 0, 
+			NULL ) )
+			return( -1 ); 
+		x = combine[0];
+		break;
+
 	case VIPS_COMBINE_SUM:
 		if( vips_sum( abs, &combine[0], compass->times, NULL ) )
 			return( -1 );
@@ -205,9 +215,9 @@ vips_compass_init( VipsCompass *compass )
 }
 
 /**
- * vips_compass:
+ * vips_compass: (method)
  * @in: input image
- * @out: output image
+ * @out: (out): output image
  * @mask: convolve with this mask
  * @...: %NULL-terminated list of optional named arguments
  *

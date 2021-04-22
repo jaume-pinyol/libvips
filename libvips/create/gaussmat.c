@@ -116,10 +116,6 @@ vips_gaussmat_build( VipsObject *object )
 		!gaussmat->integer ) 
 		gaussmat->precision = VIPS_PRECISION_FLOAT;
 
-	if( vips_check_precision_intfloat( class->nickname, 
-		gaussmat->precision ) )
-		return( -1 ); 
-
 	/* Find the size of the mask. Limit the mask size to 10k x 10k for 
 	 * sanity. We allow x == 0, meaning a 1x1 mask.
 	 */
@@ -133,12 +129,13 @@ vips_gaussmat_build( VipsObject *object )
 		vips_error( class->nickname, "%s", _( "mask too large" ) );
 		return( -1 );
 	}
-	width = 2 * x - 1;
+	width = 2 * VIPS_MAX( x - 1, 0 ) + 1;
 	height = gaussmat->separable ? 1 : width; 
 
 	vips_image_init_fields( create->out,
 		width, height, 1, 
-		VIPS_FORMAT_DOUBLE, VIPS_CODING_NONE, VIPS_INTERPRETATION_B_W,
+		VIPS_FORMAT_DOUBLE, VIPS_CODING_NONE, 
+		VIPS_INTERPRETATION_MULTIBAND,
 		1.0, 1.0 ); 
 	vips_image_pipelinev( create->out, 
 		VIPS_DEMAND_STYLE_ANY, NULL );
@@ -153,13 +150,18 @@ vips_gaussmat_build( VipsObject *object )
 			double distance = xo * xo + yo * yo;
 			double v = exp( -distance / sig2 );
 
-			if( gaussmat->precision == VIPS_PRECISION_INTEGER )
+			if( gaussmat->precision != VIPS_PRECISION_FLOAT )
 				v = VIPS_RINT( 20 * v );
 
 			*VIPS_MATRIX( create->out, x, y ) = v;
 			sum += v; 
 		}
 	}
+
+	/* Make sure we can't make sum == 0: it'd certainly cause /0 later. 
+	 */
+	if( sum == 0 )
+		sum = 1;
 
 	vips_image_set_double( create->out, "scale", sum ); 
 	vips_image_set_double( create->out, "offset", 0.0 ); 
@@ -227,7 +229,7 @@ vips_gaussmat_init( VipsGaussmat *gaussmat )
 
 /**
  * vips_gaussmat:
- * @out: output image
+ * @out: (out): output image
  * @sigma: standard deviation of mask
  * @min_ampl: minimum amplitude
  * @...: %NULL-terminated list of optional named arguments

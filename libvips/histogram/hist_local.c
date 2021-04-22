@@ -108,8 +108,8 @@ vips_hist_local_stop( void *vseq, void *a, void *b )
 
 		for( i = 0; i < in->Bands; i++ )
 			VIPS_FREE( seq->hist[i] );
-		VIPS_FREE( seq->hist );
 	}
+	VIPS_FREE( seq->hist );
 	VIPS_FREE( seq );
 
 	return( 0 );
@@ -346,6 +346,7 @@ vips_hist_local_class_init( VipsHistLocalClass *class )
 {
 	GObjectClass *gobject_class = G_OBJECT_CLASS( class );
 	VipsObjectClass *object_class = (VipsObjectClass *) class;
+	VipsOperationClass *operation_class = VIPS_OPERATION_CLASS( class );
 
 	gobject_class->set_property = vips_object_set_property;
 	gobject_class->get_property = vips_object_get_property;
@@ -353,6 +354,8 @@ vips_hist_local_class_init( VipsHistLocalClass *class )
 	object_class->nickname = "hist_local";
 	object_class->description = _( "local histogram equalisation" );
 	object_class->build = vips_hist_local_build;
+
+	operation_class->flags = VIPS_OPERATION_SEQUENTIAL;
 
 	VIPS_ARG_IMAGE( class, "in", 1, 
 		_( "Input" ), 
@@ -395,9 +398,9 @@ vips_hist_local_init( VipsHistLocal *local )
 }
 
 /**
- * vips_hist_local:
+ * vips_hist_local: (method)
  * @in: input image
- * @out: output image
+ * @out: (out): output image
  * @width: width of region
  * @height: height of region
  * @...: %NULL-terminated list of optional named arguments

@@ -46,6 +46,7 @@
 #include <ctype.h>
 
 #include <vips/vips.h>
+#include <vips/vips7compat.h>
 #include <vips/internal.h>
 #include <vips/debug.h>
 #include <vips/vector.h>
@@ -78,12 +79,17 @@ void
 im_filename_split( const char *path, char *name, char *mode )
 {
         char *p;
+	size_t len;
 
         vips_strncpy( name, path, FILENAME_MAX );
+	strcpy( mode, "" );
 
-	/* Search back towards start stopping at each ':' char.
+	if( (len = strlen( name )) == 0 ) 
+	       return;	
+
+	/* Search backwards towards start, stopping at each ':' char.
 	 */
-	for( p = name + strlen( name ) - 1; p > name; p -= 1 )
+	for( p = name + len - 1; p > name; p -= 1 )
 		if( *p == ':' ) {
 			char *q;
 
@@ -119,8 +125,6 @@ im_filename_split( const char *path, char *name, char *mode )
                 vips_strncpy( mode, p + 1, FILENAME_MAX );
                 *p = '\0';
         }
-        else
-                strcpy( mode, "" );
 }
 
 /** 
@@ -602,7 +606,7 @@ lookup_enum( GType type, const char *names[], const char *name )
 		return( value->value );
 
 	for( i = 0; names[i]; i++ )
-		if( strcasecmp( names[i], name ) == 0 )
+		if( g_ascii_strcasecmp( names[i], name ) == 0 )
 			return( i );
 
 	return( -1 );
@@ -3383,7 +3387,7 @@ im_Lab2XYZ_temp( IMAGE *in, IMAGE *out, double X0, double Y0, double Z0 )
 	VipsArea *temp;
 	VipsImage *x;
 
-	temp = (VipsArea *) vips_array_double_newv( 3, X0, Y0, Z0 ); 
+	temp = VIPS_AREA( vips_array_double_newv( 3, X0, Y0, Z0 ) );
 	if( vips_Lab2XYZ( in, &x, "temp", temp, NULL ) ) {
 		vips_area_unref( temp );
 		return( -1 );
@@ -3425,7 +3429,7 @@ im_XYZ2Lab_temp( IMAGE *in, IMAGE *out, double X0, double Y0, double Z0 )
 	ary[0] = X0;
 	ary[1] = Y0;
 	ary[2] = Z0;
-	temp = (VipsArea *) vips_array_double_new( ary, 3 ); 
+	temp = VIPS_AREA( vips_array_double_new( ary, 3 ) ); 
 	if( vips_XYZ2Lab( in, &x, "temp", temp, NULL ) ) {
 		vips_area_unref( temp );
 		return( -1 );
@@ -4367,6 +4371,68 @@ im_profile( IMAGE *in, IMAGE *out, int dir )
 }
 
 int
+im_erode( IMAGE *in, IMAGE *out, INTMASK *mask )
+{
+	VipsImage *t1, *t2;
+
+	if( !(t1 = vips_image_new()) ||
+		im_imask2vips( mask, t1 ) )
+		return( -1 );
+
+	if( vips_morph( in, &t2, t1, VIPS_OPERATION_MORPHOLOGY_ERODE,
+		NULL ) ) {
+		g_object_unref( t1 );
+		return( -1 );
+	}
+	g_object_unref( t1 );
+
+	if( vips_image_write( t2, out ) ) {
+		g_object_unref( t2 );
+		return( -1 );
+	}
+	g_object_unref( t2 );
+
+	return( 0 );
+}
+
+int
+im_erode_raw( IMAGE *in, IMAGE *out, INTMASK *m )
+{
+	return( im_erode( in, out, m ) );
+}
+
+int
+im_dilate( IMAGE *in, IMAGE *out, INTMASK *mask )
+{
+	VipsImage *t1, *t2;
+
+	if( !(t1 = vips_image_new()) ||
+		im_imask2vips( mask, t1 ) )
+		return( -1 );
+
+	if( vips_morph( in, &t2, t1, VIPS_OPERATION_MORPHOLOGY_DILATE,
+		NULL ) ) {
+		g_object_unref( t1 );
+		return( -1 );
+	}
+	g_object_unref( t1 );
+
+	if( vips_image_write( t2, out ) ) {
+		g_object_unref( t2 );
+		return( -1 );
+	}
+	g_object_unref( t2 );
+
+	return( 0 );
+}
+
+int
+im_dilate_raw( IMAGE *in, IMAGE *out, INTMASK *m )
+{
+	return( im_dilate( in, out, m ) );
+}
+
+int
 im_mpercent( IMAGE *in, double percent, int *out )
 {
 	if( vips_percent( in, percent * 100.0, out, NULL ) )
@@ -4562,9 +4628,9 @@ im__affinei( VipsImage *in, VipsImage *out,
 	VipsArea *oarea;
 	gboolean repack;
 
-	oarea = (VipsArea *) vips_array_int_newv( 4, 
+	oarea = VIPS_AREA( vips_array_int_newv( 4, 
 		trn->oarea.left, trn->oarea.top,
-		trn->oarea.width, trn->oarea.height );
+		trn->oarea.width, trn->oarea.height ) );
 
 	/* vips7 affine would repack labq and im_benchmark() depends upon
 	 * this.
@@ -5190,6 +5256,23 @@ im_global_balance( IMAGE *in, IMAGE *out, double gamma )
 	return( 0 );
 }
 
+int 
+im_histplot( IMAGE *in, IMAGE *out )
+{
+	VipsImage *x;
+
+	if( vips_hist_plot( in, &x, NULL ) )
+		return( -1 );
+
+	if( vips_image_write( x, out ) ) {
+		g_object_unref( x );
+		return( -1 );
+	}
+	g_object_unref( x );
+
+	return( 0 );
+}
+
 int
 im_global_balancef( IMAGE *in, IMAGE *out, double gamma )
 {
@@ -5227,6 +5310,32 @@ im_remosaic( IMAGE *in, IMAGE *out, const char *old_str, const char *new_str )
 }
 
 int
+im_lrmosaic( IMAGE *ref, IMAGE *sec, IMAGE *out,
+	int bandno,
+	int xref, int yref, int xsec, int ysec,
+ 	int hwindowsize, int hsearchsize,
+	int balancetype,
+	int mwidth )
+{
+	VipsImage *x;
+
+	if( vips_mosaic( ref, sec, &x, VIPS_DIRECTION_HORIZONTAL,
+		xref, yref, xsec, ysec,
+		"hwindow", hwindowsize,
+		"harea", hsearchsize,
+		"mblend", mwidth,
+		NULL ) ) 
+		return( -1 );
+	if( vips_image_write( x, out ) ) {
+		g_object_unref( x );
+		return( -1 );
+	}
+	g_object_unref( x );
+
+	return( 0 );
+}
+
+int
 im_lrmosaic1( IMAGE *ref, IMAGE *sec, IMAGE *out, 
 	int bandno,
 	int xr1, int yr1, int xs1, int ys1, 
@@ -5241,6 +5350,32 @@ im_lrmosaic1( IMAGE *ref, IMAGE *sec, IMAGE *out,
 		xr1, yr1, xs1, ys1, xr2, yr2, xs2, ys2,
 		"search", TRUE,
 		"bandno", bandno,
+		"hwindow", hwindowsize,
+		"harea", hsearchsize,
+		"mblend", mwidth,
+		NULL ) ) 
+		return( -1 );
+	if( vips_image_write( x, out ) ) {
+		g_object_unref( x );
+		return( -1 );
+	}
+	g_object_unref( x );
+
+	return( 0 );
+}
+
+int
+im_tbmosaic( IMAGE *ref, IMAGE *sec, IMAGE *out,
+	int bandno,
+	int xref, int yref, int xsec, int ysec,
+ 	int hwindowsize, int hsearchsize,
+	int balancetype,
+	int mwidth )
+{
+	VipsImage *x;
+
+	if( vips_mosaic( ref, sec, &x, VIPS_DIRECTION_VERTICAL,
+		xref, yref, xsec, ysec,
 		"hwindow", hwindowsize,
 		"harea", hsearchsize,
 		"mblend", mwidth,
@@ -5285,6 +5420,35 @@ im_tbmosaic1( IMAGE *ref, IMAGE *sec, IMAGE *out,
 }
 
 int
+im_correl( VipsImage *ref, VipsImage *sec,
+	int xref, int yref, int xsec, int ysec,
+	int hwindowsize, int hsearchsize,
+	double *correlation, int *x, int *y )
+{
+	return( vips__correl( ref, sec, xref, yref, xsec, ysec,
+		hwindowsize, hsearchsize, correlation, x, y ) );
+}
+
+int
+im_lrmerge( IMAGE *ref, IMAGE *sec, IMAGE *out,
+	int dx, int dy, int mwidth )
+{
+	VipsImage *x;
+
+	if( vips_merge( ref, sec, &x, VIPS_DIRECTION_HORIZONTAL, dx, dy,
+		"mblend", mwidth,
+		NULL ) ) 
+		return( -1 );
+	if( vips_image_write( x, out ) ) {
+		g_object_unref( x );
+		return( -1 );
+	}
+	g_object_unref( x );
+
+	return( 0 );
+}
+
+int
 im_lrmerge1( IMAGE *ref, IMAGE *sec, IMAGE *out,
 	int xr1, int yr1, int xs1, int ys1, 
 	int xr2, int yr2, int xs2, int ys2,
@@ -5294,6 +5458,25 @@ im_lrmerge1( IMAGE *ref, IMAGE *sec, IMAGE *out,
 
 	if( vips_mosaic1( ref, sec, &x, VIPS_DIRECTION_HORIZONTAL,
 		xr1, yr1, xs1, ys1, xr2, yr2, xs2, ys2,
+		"mblend", mwidth,
+		NULL ) ) 
+		return( -1 );
+	if( vips_image_write( x, out ) ) {
+		g_object_unref( x );
+		return( -1 );
+	}
+	g_object_unref( x );
+
+	return( 0 );
+}
+
+int
+im_tbmerge( IMAGE *ref, IMAGE *sec, IMAGE *out,
+	int dx, int dy, int mwidth )
+{
+	VipsImage *x;
+
+	if( vips_merge( ref, sec, &x, VIPS_DIRECTION_VERTICAL, dx, dy,
 		"mblend", mwidth,
 		NULL ) ) 
 		return( -1 );
@@ -5509,3 +5692,14 @@ vips_get_option_group( void )
 
 	return( option_group );
 }
+
+/* We used to use this for system() back in the day. But it's awkward to make
+ * it work properly on win32, so this is nonw deprecated.
+ */
+FILE *
+vips_popenf( const char *fmt, const char *mode, ... )
+{
+        vips_error( "popenf", "%s", _( "deprecated" ) );
+        return( NULL );
+}
+

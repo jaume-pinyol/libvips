@@ -69,6 +69,115 @@
  *
  */
 
+/**
+ * vips_composite: (method)
+ * @in: (array length=n) (transfer none): array of input images
+ * @out: (out): output image
+ * @n: number of input images
+ * @mode: array of (@n - 1) #VipsBlendMode
+ * @...: %NULL-terminated list of optional named arguments
+ *
+ * Optional arguments:
+ *
+ * * @compositing_space: #VipsInterpretation to composite in
+ * * @premultiplied: %gboolean, images are already premultiplied
+ * * @x: #VipsArrayInt, position of subimages
+ * * @y: #VipsArrayInt, position of subimages
+ *
+ * Composite an array of images together. 
+ *
+ * Images are placed in a stack, with @in[0] at the bottom and @in[@n - 1] at
+ * the top. Pixels are blended together working from the bottom upwards, with 
+ * the blend mode at each step being set by the corresponding #VipsBlendMode
+ * in @mode.
+ *
+ * Images are transformed to a compositing space before processing. This is
+ * #VIPS_INTERPRETATION_sRGB, #VIPS_INTERPRETATION_B_W,
+ * #VIPS_INTERPRETATION_RGB16, or #VIPS_INTERPRETATION_GREY16 
+ * by default, depending on 
+ * how many bands and bits the input images have. You can select any other 
+ * space, such as #VIPS_INTERPRETATION_LAB or #VIPS_INTERPRETATION_scRGB.
+ *
+ * The output image is in the compositing space. It will always be 
+ * #VIPS_FORMAT_FLOAT unless one of the inputs is #VIPS_FORMAT_DOUBLE, in 
+ * which case the output will be double as well.
+ *
+ * Complex images are not supported.
+ *
+ * The output image will always have an alpha band. A solid alpha is
+ * added to any input missing an alpha. 
+ *
+ * The images do not need to match in size or format. They will be expanded to
+ * the smallest common size and format in the usual way. Images are positioned
+ * using the @x and @y parameters, if set. 
+ *
+ * Image are normally treated as unpremultiplied, so this operation can be used
+ * directly on PNG images. If your images have been through vips_premultiply(),
+ * set @premultiplied. 
+ *
+ * See also: vips_insert().
+ *
+ * Returns: 0 on success, -1 on error
+ */
+
+/**
+ * vips_composite2: (method)
+ * @base: first input image
+ * @overlay: second input image
+ * @out: (out): output image
+ * @mode: composite with this blend mode
+ * @...: %NULL-terminated list of optional named arguments
+ *
+ * Optional arguments:
+ *
+ * * @compositing_space: #VipsInterpretation to composite in
+ * * @premultiplied: %gboolean, images are already premultiplied
+ * * @x: %gint, position of overlay
+ * * @y: %gint, position of overlay
+ *
+ * Composite @overlay on top of @base with @mode. See vips_composite().
+ *
+ * Returns: 0 on success, -1 on error
+ */
+
+/**
+ * VipsBlendMode:
+ * @VIPS_BLEND_MODE_CLEAR: where the second object is drawn, the first is removed
+ * @VIPS_BLEND_MODE_SOURCE: the second object is drawn as if nothing were below
+ * @VIPS_BLEND_MODE_OVER: the image shows what you would expect if you held two semi-transparent slides on top of each other
+ * @VIPS_BLEND_MODE_IN: the first object is removed completely, the second is only drawn where the first was
+ * @VIPS_BLEND_MODE_OUT: the second is drawn only where the first isn't
+ * @VIPS_BLEND_MODE_ATOP: this leaves the first object mostly intact, but mixes both objects in the overlapping area
+ * @VIPS_BLEND_MODE_DEST: leaves the first object untouched, the second is discarded completely
+ * @VIPS_BLEND_MODE_DEST_OVER: like OVER, but swaps the arguments
+ * @VIPS_BLEND_MODE_DEST_IN: like IN, but swaps the arguments
+ * @VIPS_BLEND_MODE_DEST_OUT: like OUT, but swaps the arguments
+ * @VIPS_BLEND_MODE_DEST_ATOP: like ATOP, but swaps the arguments
+ * @VIPS_BLEND_MODE_XOR: something like a difference operator
+ * @VIPS_BLEND_MODE_ADD: a bit like adding the two images
+ * @VIPS_BLEND_MODE_SATURATE: a bit like the darker of the two
+ * @VIPS_BLEND_MODE_MULTIPLY: at least as dark as the darker of the two inputs
+ * @VIPS_BLEND_MODE_SCREEN: at least as light as the lighter of the inputs
+ * @VIPS_BLEND_MODE_OVERLAY: multiplies or screens colors, depending on the lightness
+ * @VIPS_BLEND_MODE_DARKEN: the darker of each component
+ * @VIPS_BLEND_MODE_LIGHTEN: the lighter of each component
+ * @VIPS_BLEND_MODE_COLOUR_DODGE: brighten first by a factor second
+ * @VIPS_BLEND_MODE_COLOUR_BURN: darken first by a factor of second
+ * @VIPS_BLEND_MODE_HARD_LIGHT: multiply or screen, depending on lightness
+ * @VIPS_BLEND_MODE_SOFT_LIGHT: darken or lighten, depending on lightness
+ * @VIPS_BLEND_MODE_DIFFERENCE: difference of the two
+ * @VIPS_BLEND_MODE_EXCLUSION: somewhat like DIFFERENCE, but lower-contrast
+ *
+ * The various Porter-Duff and PDF blend modes. See vips_composite(), 
+ * for example.
+ *
+ * The Cairo docs have a nice explanation of all the blend modes:
+ *
+ * https://www.cairographics.org/operators
+ *
+ * The non-separable modes are not implemented.
+ */
+
 /** 
  * VipsAlign:
  * @VIPS_ALIGN_LOW: align low coordinate edge
@@ -103,12 +212,34 @@
  * @VIPS_INTERESTING_CENTRE: just take the centre
  * @VIPS_INTERESTING_ENTROPY: use an entropy measure
  * @VIPS_INTERESTING_ATTENTION: look for features likely to draw human attention
+ * @VIPS_INTERESTING_LOW: position the crop towards the low coordinate
+ * @VIPS_INTERESTING_HIGH: position the crop towards the high coordinate
+ * @VIPS_INTERESTING_ALL: everything is interesting
  *
  * Pick the algorithm vips uses to decide image "interestingness". This is used
  * by vips_smartcrop(), for example, to decide what parts of the image to
- * keep. 
+ * keep.
+ *
+ * #VIPS_INTERESTING_NONE and #VIPS_INTERESTING_LOW mean the same -- the
+ * crop is positioned at the top or left. #VIPS_INTERESTING_HIGH positions at
+ * the bottom or right. 
  *
  * See also: vips_smartcrop().
+ */
+
+/**
+ * VipsCompassDirection:
+ * @VIPS_COMPASS_DIRECTION_CENTRE: centre
+ * @VIPS_COMPASS_DIRECTION_NORTH: north
+ * @VIPS_COMPASS_DIRECTION_EAST: east
+ * @VIPS_COMPASS_DIRECTION_SOUTH: south
+ * @VIPS_COMPASS_DIRECTION_WEST: west
+ * @VIPS_COMPASS_DIRECTION_NORTH_EAST: north-east
+ * @VIPS_COMPASS_DIRECTION_SOUTH_EAST: south-east
+ * @VIPS_COMPASS_DIRECTION_SOUTH_WEST: south-west
+ * @VIPS_COMPASS_DIRECTION_NORTH_WEST: north-west
+ *
+ * A direction on a compass. Used for vips_gravity(), for example. 
  */
 
 /**
@@ -234,6 +365,7 @@ vips_conversion_operation_init( void )
 	extern GType vips_sequential_get_type( void ); 
 	extern GType vips_cache_get_type( void ); 
 	extern GType vips_embed_get_type( void ); 
+	extern GType vips_gravity_get_type( void ); 
 	extern GType vips_flip_get_type( void ); 
 	extern GType vips_insert_get_type( void ); 
 	extern GType vips_join_get_type( void ); 
@@ -252,6 +384,7 @@ vips_conversion_operation_init( void )
 	extern GType vips_rot45_get_type( void ); 
 	extern GType vips_autorot_get_type( void ); 
 	extern GType vips_ifthenelse_get_type( void ); 
+	extern GType vips_switch_get_type( void ); 
 	extern GType vips_recomb_get_type( void ); 
 	extern GType vips_bandmean_get_type( void ); 
 	extern GType vips_bandfold_get_type( void ); 
@@ -262,6 +395,7 @@ vips_conversion_operation_init( void )
 	extern GType vips_bandbool_get_type( void ); 
 	extern GType vips_gaussnoise_get_type( void ); 
 	extern GType vips_grid_get_type( void ); 
+	extern GType vips_transpose3d_get_type( void ); 
 	extern GType vips_scale_get_type( void ); 
 	extern GType vips_wrap_get_type( void ); 
 	extern GType vips_zoom_get_type( void ); 
@@ -274,6 +408,8 @@ vips_conversion_operation_init( void )
 	extern GType vips_xyz_get_type( void ); 
 	extern GType vips_falsecolour_get_type( void ); 
 	extern GType vips_gamma_get_type( void ); 
+	extern GType vips_composite_get_type( void ); 
+	extern GType vips_composite2_get_type( void ); 
 
 	vips_copy_get_type();
 	vips_tile_cache_get_type(); 
@@ -281,6 +417,7 @@ vips_conversion_operation_init( void )
 	vips_sequential_get_type(); 
 	vips_cache_get_type(); 
 	vips_embed_get_type();
+	vips_gravity_get_type();
 	vips_flip_get_type();
 	vips_insert_get_type();
 	vips_join_get_type();
@@ -299,6 +436,7 @@ vips_conversion_operation_init( void )
 	vips_rot45_get_type();
 	vips_autorot_get_type();
 	vips_ifthenelse_get_type();
+	vips_switch_get_type(); 
 	vips_recomb_get_type(); 
 	vips_bandmean_get_type(); 
 	vips_bandfold_get_type(); 
@@ -309,6 +447,7 @@ vips_conversion_operation_init( void )
 	vips_bandbool_get_type(); 
 	vips_gaussnoise_get_type(); 
 	vips_grid_get_type(); 
+	vips_transpose3d_get_type(); 
 	vips_scale_get_type(); 
 	vips_wrap_get_type(); 
 	vips_zoom_get_type(); 
@@ -321,4 +460,6 @@ vips_conversion_operation_init( void )
 	vips_xyz_get_type(); 
 	vips_falsecolour_get_type(); 
 	vips_gamma_get_type(); 
+	vips_composite_get_type(); 
+	vips_composite2_get_type(); 
 }

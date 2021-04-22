@@ -73,6 +73,7 @@
 #include <stdlib.h>
 
 #include <vips/vips.h>
+#include <vips/internal.h>
 
 #include "binary.h"
 #include "unaryconst.h"
@@ -140,6 +141,15 @@ vips_boolean_build( VipsObject *object )
 		g_assert_not_reached(); \
 	} 
 
+#define FNLOOP( TYPE, FN ) { \
+	TYPE * restrict left = (TYPE *) in[0]; \
+	TYPE * restrict right = (TYPE *) in[1]; \
+	int * restrict q = (int *) out; \
+	\
+	for( x = 0; x < sz; x++ ) \
+		q[x] = FN( left[x], right[x] ); \
+}
+
 static void
 vips_boolean_buffer( VipsArithmetic *arithmetic, 
 	VipsPel *out, VipsPel **in, int width )
@@ -163,8 +173,30 @@ vips_boolean_buffer( VipsArithmetic *arithmetic,
 		SWITCH( LOOP, FLOOP, ^ ); 
 		break;
 
+	/* Special case: we need to be able to use VIPS_LSHIFT_INT().
+	 */
 	case VIPS_OPERATION_BOOLEAN_LSHIFT: 	
-		SWITCH( LOOP, FLOOP, << ); 
+		switch( vips_image_get_format( im ) ) { 
+		case VIPS_FORMAT_UCHAR:	
+			LOOP( unsigned char, << ); break; 
+		case VIPS_FORMAT_CHAR:
+			FNLOOP( signed char, VIPS_LSHIFT_INT ); break; 
+		case VIPS_FORMAT_USHORT:
+			LOOP( unsigned short, << ); break; 
+		case VIPS_FORMAT_SHORT:
+			FNLOOP( signed short, VIPS_LSHIFT_INT ); break; 
+		case VIPS_FORMAT_UINT:
+			LOOP( unsigned int, << ); break; 
+		case VIPS_FORMAT_INT:
+			FNLOOP( signed int, VIPS_LSHIFT_INT ); break; 
+		case VIPS_FORMAT_FLOAT:
+			FLOOP( float, << ); break; 
+		case VIPS_FORMAT_DOUBLE:
+			FLOOP( double, << ); break;
+		
+		default: 
+			g_assert_not_reached(); 
+		} 
 		break;
 
 	case VIPS_OPERATION_BOOLEAN_RSHIFT: 	
@@ -240,7 +272,7 @@ vips_booleanv( VipsImage *left, VipsImage *right, VipsImage **out,
  * vips_boolean:
  * @left: left-hand input #VipsImage
  * @right: right-hand input #VipsImage
- * @out: output #VipsImage
+ * @out: (out): output #VipsImage
  * @boolean: boolean operation to perform
  * @...: %NULL-terminated list of optional named arguments
  *
@@ -284,7 +316,7 @@ vips_boolean( VipsImage *left, VipsImage *right, VipsImage **out,
  * vips_andimage:
  * @left: left-hand input #VipsImage
  * @right: right-hand input #VipsImage
- * @out: output #VipsImage
+ * @out: (out): output #VipsImage
  * @...: %NULL-terminated list of optional named arguments
  *
  * Perform #VIPS_OPERATION_BOOLEAN_AND on a pair of images. See
@@ -310,7 +342,7 @@ vips_andimage( VipsImage *left, VipsImage *right, VipsImage **out, ... )
  * vips_orimage:
  * @left: left-hand input #VipsImage
  * @right: right-hand input #VipsImage
- * @out: output #VipsImage
+ * @out: (out): output #VipsImage
  * @...: %NULL-terminated list of optional named arguments
  *
  * Perform #VIPS_OPERATION_BOOLEAN_OR on a pair of images. See
@@ -336,7 +368,7 @@ vips_orimage( VipsImage *left, VipsImage *right, VipsImage **out, ... )
  * vips_eorimage:
  * @left: left-hand input #VipsImage
  * @right: right-hand input #VipsImage
- * @out: output #VipsImage
+ * @out: (out): output #VipsImage
  * @...: %NULL-terminated list of optional named arguments
  *
  * Perform #VIPS_OPERATION_BOOLEAN_EOR on a pair of images. See
@@ -362,7 +394,7 @@ vips_eorimage( VipsImage *left, VipsImage *right, VipsImage **out, ... )
  * vips_lshift:
  * @left: left-hand input #VipsImage
  * @right: right-hand input #VipsImage
- * @out: output #VipsImage
+ * @out: (out): output #VipsImage
  * @...: %NULL-terminated list of optional named arguments
  *
  * Perform #VIPS_OPERATION_BOOLEAN_LSHIFT on a pair of images. See
@@ -388,7 +420,7 @@ vips_lshift( VipsImage *left, VipsImage *right, VipsImage **out, ... )
  * vips_rshift:
  * @left: left-hand input #VipsImage
  * @right: right-hand input #VipsImage
- * @out: output #VipsImage
+ * @out: (out): output #VipsImage
  * @...: %NULL-terminated list of optional named arguments
  *
  * Perform #VIPS_OPERATION_BOOLEAN_RSHIFT on a pair of images. See
@@ -426,13 +458,10 @@ vips_boolean_const_build( VipsObject *object )
 {
 	VipsObjectClass *class = VIPS_OBJECT_GET_CLASS( object );
 	VipsUnary *unary = (VipsUnary *) object;
-	VipsUnaryConst *uconst = (VipsUnaryConst *) object;
 
 	if( unary->in &&
 		vips_check_noncomplex( class->nickname, unary->in ) )
 		return( -1 );
-
-	uconst->const_format = VIPS_FORMAT_INT;
 
 	if( VIPS_OBJECT_CLASS( vips_boolean_const_parent_class )->
 		build( object ) )
@@ -442,9 +471,9 @@ vips_boolean_const_build( VipsObject *object )
 }
 
 #define LOOPC( TYPE, OP ) { \
-	TYPE *p = (TYPE *) in[0]; \
-	TYPE *q = (TYPE *) out; \
-	int *c = (int *) uconst->c_ready; \
+	TYPE * restrict p = (TYPE *) in[0]; \
+	TYPE * restrict q = (TYPE *) out; \
+	int * restrict c = uconst->c_int; \
  	\
 	for( i = 0, x = 0; x < width; x++ ) \
 		for( b = 0; b < bands; b++, i++ ) \
@@ -452,9 +481,9 @@ vips_boolean_const_build( VipsObject *object )
 }
 
 #define FLOOPC( TYPE, OP ) { \
-	TYPE *p = (TYPE *) in[0]; \
-	int *q = (int *) out; \
-	int *c = (int *) uconst->c_ready; \
+	TYPE * restrict p = (TYPE *) in[0]; \
+	int * restrict q = (int *) out; \
+	int * restrict c = uconst->c_int; \
  	\
 	for( i = 0, x = 0; x < width; x++ ) \
 		for( b = 0; b < bands; b++, i++ ) \
@@ -533,7 +562,7 @@ vips_boolean_const_init( VipsBooleanConst *boolean_const )
 
 static int
 vips_boolean_constv( VipsImage *in, VipsImage **out, 
-	VipsOperationBoolean operation, double *c, int n, va_list ap )
+	VipsOperationBoolean operation, const double *c, int n, va_list ap )
 {
 	VipsArea *area_c;
 	double *array; 
@@ -554,11 +583,11 @@ vips_boolean_constv( VipsImage *in, VipsImage **out,
 }
 
 /**
- * vips_boolean_const:
+ * vips_boolean_const: (method)
  * @in: input image
- * @out: output image
+ * @out: (out): output image
  * @boolean: boolean operation to perform
- * @c: array of constants 
+ * @c: (array length=n): array of constants
  * @n: number of constants in @c
  * @...: %NULL-terminated list of optional named arguments
  *
@@ -580,7 +609,7 @@ vips_boolean_constv( VipsImage *in, VipsImage **out,
  */
 int
 vips_boolean_const( VipsImage *in, VipsImage **out, 
-	VipsOperationBoolean boolean, double *c, int n, ... )
+	VipsOperationBoolean boolean, const double *c, int n, ... )
 {
 	va_list ap;
 	int result;
@@ -593,10 +622,10 @@ vips_boolean_const( VipsImage *in, VipsImage **out,
 }
 
 /**
- * vips_andimage_const:
+ * vips_andimage_const: (method)
  * @in: input image
- * @out: output image
- * @c: array of constants 
+ * @out: (out): output image
+ * @c: (array length=n): array of constants
  * @n: number of constants in @c
  * @...: %NULL-terminated list of optional named arguments
  *
@@ -608,7 +637,8 @@ vips_boolean_const( VipsImage *in, VipsImage **out,
  * Returns: 0 on success, -1 on error
  */
 int
-vips_andimage_const( VipsImage *in, VipsImage **out, double *c, int n, ... )
+vips_andimage_const( VipsImage *in, VipsImage **out, 
+	const double *c, int n, ... )
 {
 	va_list ap;
 	int result;
@@ -622,10 +652,10 @@ vips_andimage_const( VipsImage *in, VipsImage **out, double *c, int n, ... )
 }
 
 /**
- * vips_orimage_const:
+ * vips_orimage_const: (method)
  * @in: input image
- * @out: output image
- * @c: array of constants 
+ * @out: (out): output image
+ * @c: (array length=n): array of constants
  * @n: number of constants in @c
  * @...: %NULL-terminated list of optional named arguments
  *
@@ -637,7 +667,8 @@ vips_andimage_const( VipsImage *in, VipsImage **out, double *c, int n, ... )
  * Returns: 0 on success, -1 on error
  */
 int
-vips_orimage_const( VipsImage *in, VipsImage **out, double *c, int n, ... )
+vips_orimage_const( VipsImage *in, VipsImage **out, 
+	const double *c, int n, ... )
 {
 	va_list ap;
 	int result;
@@ -651,10 +682,10 @@ vips_orimage_const( VipsImage *in, VipsImage **out, double *c, int n, ... )
 }
 
 /**
- * vips_eorimage_const:
+ * vips_eorimage_const: (method)
  * @in: input image
- * @out: output image
- * @c: array of constants 
+ * @out: (out): output image
+ * @c: (array length=n): array of constants
  * @n: number of constants in @c
  * @...: %NULL-terminated list of optional named arguments
  *
@@ -666,7 +697,8 @@ vips_orimage_const( VipsImage *in, VipsImage **out, double *c, int n, ... )
  * Returns: 0 on success, -1 on error
  */
 int
-vips_eorimage_const( VipsImage *in, VipsImage **out, double *c, int n, ... )
+vips_eorimage_const( VipsImage *in, VipsImage **out, 
+	const double *c, int n, ... )
 {
 	va_list ap;
 	int result;
@@ -680,10 +712,10 @@ vips_eorimage_const( VipsImage *in, VipsImage **out, double *c, int n, ... )
 }
 
 /**
- * vips_lshift_const:
+ * vips_lshift_const: (method)
  * @in: input image
- * @out: output image
- * @c: array of constants 
+ * @out: (out): output image
+ * @c: (array length=n): array of constants
  * @n: number of constants in @c
  * @...: %NULL-terminated list of optional named arguments
  *
@@ -695,7 +727,7 @@ vips_eorimage_const( VipsImage *in, VipsImage **out, double *c, int n, ... )
  * Returns: 0 on success, -1 on error
  */
 int
-vips_lshift_const( VipsImage *in, VipsImage **out, double *c, int n, ... )
+vips_lshift_const( VipsImage *in, VipsImage **out, const double *c, int n, ... )
 {
 	va_list ap;
 	int result;
@@ -709,10 +741,10 @@ vips_lshift_const( VipsImage *in, VipsImage **out, double *c, int n, ... )
 }
 
 /**
- * vips_rshift_const:
+ * vips_rshift_const: (method)
  * @in: input image
- * @out: output image
- * @c: array of constants 
+ * @out: (out): output image
+ * @c: (array length=n): array of constants
  * @n: number of constants in @c
  * @...: %NULL-terminated list of optional named arguments
  *
@@ -724,7 +756,7 @@ vips_lshift_const( VipsImage *in, VipsImage **out, double *c, int n, ... )
  * Returns: 0 on success, -1 on error
  */
 int
-vips_rshift_const( VipsImage *in, VipsImage **out, double *c, int n, ... )
+vips_rshift_const( VipsImage *in, VipsImage **out, const double *c, int n, ... )
 {
 	va_list ap;
 	int result;
@@ -738,9 +770,9 @@ vips_rshift_const( VipsImage *in, VipsImage **out, double *c, int n, ... )
 }
 
 /**
- * vips_boolean_const1:
+ * vips_boolean_const1: (method)
  * @in: input image
- * @out: output image
+ * @out: (out): output image
  * @boolean: boolean operation to perform
  * @c: constant 
  * @...: %NULL-terminated list of optional named arguments
@@ -767,9 +799,9 @@ vips_boolean_const1( VipsImage *in, VipsImage **out,
 }
 
 /**
- * vips_andimage_const1:
+ * vips_andimage_const1: (method)
  * @in: input image
- * @out: output image
+ * @out: (out): output image
  * @c: constant 
  * @...: %NULL-terminated list of optional named arguments
  *
@@ -795,9 +827,9 @@ vips_andimage_const1( VipsImage *in, VipsImage **out, double c, ... )
 }
 
 /**
- * vips_orimage_const1:
+ * vips_orimage_const1: (method)
  * @in: input image
- * @out: output image
+ * @out: (out): output image
  * @c: constant 
  * @...: %NULL-terminated list of optional named arguments
  *
@@ -823,9 +855,9 @@ vips_orimage_const1( VipsImage *in, VipsImage **out, double c, ... )
 }
 
 /**
- * vips_eorimage_const1:
+ * vips_eorimage_const1: (method)
  * @in: input image
- * @out: output image
+ * @out: (out): output image
  * @c: constant 
  * @...: %NULL-terminated list of optional named arguments
  *
@@ -851,9 +883,9 @@ vips_eorimage_const1( VipsImage *in, VipsImage **out, double c, ... )
 }
 
 /**
- * vips_lshift_const1:
+ * vips_lshift_const1: (method)
  * @in: input image
- * @out: output image
+ * @out: (out): output image
  * @c: constant 
  * @...: %NULL-terminated list of optional named arguments
  *
@@ -879,9 +911,9 @@ vips_lshift_const1( VipsImage *in, VipsImage **out, double c, ... )
 }
 
 /**
- * vips_rshift_const1:
+ * vips_rshift_const1: (method)
  * @in: input image
- * @out: output image
+ * @out: (out): output image
  * @c: constant 
  * @...: %NULL-terminated list of optional named arguments
  *

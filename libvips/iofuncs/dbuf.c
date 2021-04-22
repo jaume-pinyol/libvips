@@ -45,7 +45,7 @@
  * vips_dbuf_init:
  * @dbuf: the buffer
  *
- * Initialize a buffer.
+ * Initialize @dbuf.
  */
 void
 vips_dbuf_init( VipsDbuf *dbuf )
@@ -69,7 +69,7 @@ gboolean
 vips_dbuf_minimum_size( VipsDbuf *dbuf, size_t size )
 {
 	if( size > dbuf->allocated_size ) { 
-		size_t new_allocated_size = 3 * (16 + size) / 2;
+		const size_t new_allocated_size = 3 * (16 + size) / 2;
 
 		unsigned char *new_data;
 
@@ -102,25 +102,26 @@ vips_dbuf_allocate( VipsDbuf *dbuf, size_t size )
 }
 
 /**
- * vips_dbuf_null_terminate:
+ * vips_dbuf_read:
  * @dbuf: the buffer
+ * @data: read to this area
+ * @size: read up to this many bytes
  *
- * Make sure the byte after the last data byte is `\0`. This extra byte is not
- * included in the data size and the write point is not moved.
+ * Up to @size bytes are read from the buffer and copied to @data. The number
+ * of bytes transferred is returned.
  *
- * This makes it safe to treat the dbuf contents as a C string. 
- * 
- * Returns: %FALSE on out of memory, %TRUE otherwise.
+ * Returns: the number of bytes transferred.
  */
-static gboolean
-vips_dbuf_null_terminate( VipsDbuf *dbuf )
+size_t
+vips_dbuf_read( VipsDbuf *dbuf, unsigned char *data, size_t size )
 {
-	if( !vips_dbuf_minimum_size( dbuf, dbuf->data_size + 1 ) )
-		return( FALSE );
+	const size_t available = dbuf->data_size - dbuf->write_point;
+	const size_t copied = VIPS_MIN( size, available );
 
-	dbuf->data[dbuf->data_size] = 0;
+	memcpy( data, dbuf->data + dbuf->write_point, copied );
+	dbuf->write_point += copied;
 
-	return( TRUE ); 
+	return( copied );
 }
 
 /**
@@ -141,14 +142,14 @@ unsigned char *
 vips_dbuf_get_write( VipsDbuf *dbuf, size_t *size )
 {
 	unsigned char *write = dbuf->data + dbuf->write_point;
-	size_t length = dbuf->data + dbuf->allocated_size - write;
+	const size_t available = dbuf->allocated_size - dbuf->write_point;
 
-	memset( write, 0, length ); 
+	memset( write, 0, available ); 
 	dbuf->write_point = dbuf->allocated_size;
 	dbuf->data_size = dbuf->allocated_size;
 
 	if( size )
-		*size = length;
+		*size = available;
 
 	return( write ); 
 }
@@ -206,6 +207,63 @@ vips_dbuf_writef( VipsDbuf *dbuf, const char *fmt, ... )
 }
 
 /**
+ * vips_dbuf_write_amp: 
+ * @dbuf: the buffer
+ * @str: string to write
+ *
+ * Write @str to @dbuf, but escape stuff that xml hates in text. Our
+ * argument string is utf-8.
+ *
+ * XML rules:
+ *
+ * - We must escape &<> 
+ * - Don't escape \n, \t, \r
+ * - Do escape the other ASCII codes. 
+ *
+ * Returns: %FALSE on out of memory, %TRUE otherwise.
+ */
+gboolean
+vips_dbuf_write_amp( VipsDbuf *dbuf, const char *str )
+{
+	const char *p;
+
+	for( p = str; *p; p++ ) 
+		if( *p < 32 &&
+			*p != '\n' &&
+			*p != '\t' &&
+			*p != '\r' ) {
+			/* You'd think we could output "&#x02%x;", but xml
+			 * 1.0 parsers barf on that. xml 1.1 allows this, but
+			 * there are almost no parsers. 
+			 *
+			 * U+2400 onwards are unicode glyphs for the ASCII 
+			 * control characters, so we can use them -- thanks
+			 * electroly.
+			 */
+			if( !vips_dbuf_writef( dbuf, "&#x%04x;", 0x2400 + *p ) )
+			       return( FALSE );	
+		}
+		else if( *p == '<' ) {
+			if( !vips_dbuf_write( dbuf, (guchar *) "&lt;", 4 ) )
+				return( FALSE );
+		}
+		else if( *p == '>' ) {
+			if( !vips_dbuf_write( dbuf, (guchar *) "&gt;", 4 ) )
+				return( FALSE );
+		}
+		else if( *p == '&' ) {
+			if( !vips_dbuf_write( dbuf, (guchar *) "&amp;", 5 ) )
+				return( FALSE );
+		}
+		else  {
+			if( !vips_dbuf_write( dbuf, (guchar *) p, 1 ) )
+				return( FALSE );
+		}
+
+	return( TRUE ); 
+}
+
+/**
  * vips_dbuf_reset:
  * @dbuf: the buffer
  *
@@ -223,7 +281,7 @@ vips_dbuf_reset( VipsDbuf *dbuf )
  * vips_dbuf_destroy:
  * @dbuf: the buffer
  *
- * Destroy a buffer. This frees any allocated memory.
+ * Destroy @dbuf. This frees any allocated memory.
  */
 void
 vips_dbuf_destroy( VipsDbuf *dbuf )
@@ -299,15 +357,37 @@ vips_dbuf_truncate( VipsDbuf *dbuf )
 }
 
 /**
- * vips_dbuf_truncate:
+ * vips_dbuf_tell:
  * @dbuf: the buffer
  *
- * Truncate the data so that it ends at the write point. No memory is freed. 
+ * Returns: the current write point
  */
 off_t
 vips_dbuf_tell( VipsDbuf *dbuf )
 {
 	return( dbuf->write_point ); 
+}
+
+/**
+ * vips_dbuf_null_terminate:
+ * @dbuf: the buffer
+ *
+ * Make sure the byte after the last data byte is `\0`. This extra byte is not
+ * included in the data size and the write point is not moved.
+ *
+ * This makes it safe to treat the dbuf contents as a C string. 
+ * 
+ * Returns: %FALSE on out of memory, %TRUE otherwise.
+ */
+static gboolean
+vips_dbuf_null_terminate( VipsDbuf *dbuf )
+{
+	if( !vips_dbuf_minimum_size( dbuf, dbuf->data_size + 1 ) )
+		return( FALSE );
+
+	dbuf->data[dbuf->data_size] = 0;
+
+	return( TRUE ); 
 }
 
 /**

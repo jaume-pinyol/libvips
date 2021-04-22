@@ -1,6 +1,6 @@
 #!/bin/sh
 
-# this has now been mostly superceeded by test_foreign.py ... keep this around
+# this has now been mostly superseded by test_foreign.py ... keep this around
 # as a test of the command-line interface
 
 # set -x
@@ -10,11 +10,7 @@ set -e
 
 # poppler / pdfload reference image
 poppler=$test_images/blankpage.pdf
-poppler_ref=$test_images/blankpage.png
-
-# rsvg / svgload reference image
-rsvg=$test_images/blankpage.svg
-rsvg_ref=$test_images/blankpage.png
+poppler_ref=$test_images/blankpage.pdf.png
 
 # giflib / gifload reference image
 giflib=$test_images/trans-x.gif
@@ -51,30 +47,6 @@ save_load() {
 	if ! $vips copy $tmp/t1.$format $tmp/back.v ; then
 		echo "read from $tmp/t1.format failed"
 		echo "  (was written by $vips copy $in $tmp/t1.$format$mode)"
-		exit 1
-	fi
-}
-
-# is a difference beyond a threshold? return 0 (meaning all ok) or 1 (meaning
-# error, or outside threshold)
-break_threshold() {
-	diff=$1
-	threshold=$2
-	return $(echo "$diff <= $threshold" | bc -l)
-}
-
-# subtract, look for max difference less than a threshold
-test_difference() {
-	before=$1
-	after=$2
-	threshold=$3
-
-	$vips subtract $before $after $tmp/difference.v
-	$vips abs $tmp/difference.v $tmp/abs.v 
-	dif=$($vips max $tmp/abs.v)
-
-	if break_threshold $dif $threshold; then
-		echo "save / load difference is $dif"
 		exit 1
 	fi
 }
@@ -139,13 +111,14 @@ test_loader() {
 	ref=$1
 	in=$2
 	format=$3
+	thresh=$4
 
 	printf "testing $(basename $in) $format ... "
 
 	$vips copy $ref $tmp/before.v
 	$vips copy $in $tmp/after.v
 
-	test_difference $tmp/before.v $tmp/after.v 0
+	test_difference $tmp/before.v $tmp/after.v $thresh
 
 	echo "ok"
 }
@@ -170,20 +143,6 @@ test_saver() {
 	echo "ok"
 }
 
-# test for file format supported
-test_supported() {
-	format=$1
-
-	if $vips $format > /dev/null 2>&1; then
-		result=0
-	else
-		echo "support for $format not configured, skipping test"
-		result=1
-	fi
-
-	return $result
-}
-
 test_format $image v 0
 if test_supported tiffload; then
 	test_format $image tif 0
@@ -196,6 +155,7 @@ fi
 if test_supported pngload; then
 	test_format $image png 0
 	test_format $image png 0 [compression=9,interlace=1]
+	test_format $image png 90 [palette,colours=256,Q=100,dither=0,interlace=1]
 fi
 if test_supported jpegload; then
 	test_format $image jpg 90
@@ -229,19 +189,17 @@ test_raw $mono
 test_raw $image 
 
 if test_supported pdfload; then
-	test_loader $poppler_ref $poppler pdfload
+	test_loader $poppler_ref $poppler pdfload 0
 fi
 
-if test_supported svgload; then
-	test_loader $rsvg_ref $rsvg svgload
-fi
+# don't test SVG --- the output varies too much between librsvg versions
 
 if test_supported gifload; then
-	test_loader $giflib_ref $giflib gifload
+	test_loader $giflib_ref $giflib gifload 0
 fi
 
 if test_supported matload; then
-	test_loader $matlab_ref $matlab matlab
+	test_loader $matlab_ref $matlab matlab 0
 fi
 
 if test_supported dzsave; then

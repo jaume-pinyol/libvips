@@ -1,21 +1,23 @@
 /* modify vips file header! - useful for setting resolution, coding...
-very dangerous!
-no way of setting non-used codes in variables like newxres
-so need flags to show new parameter has been set.. boring
-Copyright K.Martinez 30/6/93
-29/7/93 JC
-	-format added
-	- ==0 added to strcmp!
-17/11/94 JC
-	- new header fields added
-21/10/04
-	- more header updates
-
-22/8/05
- 	- less-stupid-ified
-20/9/05
-	- rewritten with glib option parser, ready for xml options to go in
- 
+ * very dangerous!
+ *
+ * no way of setting non-used codes in variables like newxres
+ * so need flags to show new parameter has been set.. boring
+ * Copyright K.Martinez 30/6/93
+ *
+ * 29/7/93 JC
+ * 	- format added
+ * 	- ==0 added to strcmp!
+ * 17/11/94 JC
+ * 	- new header fields added
+ * 21/10/04
+ * 	- more header updates
+ * 22/8/05
+ * 	- less-stupid-ified
+ * 20/9/05
+ * 	- rewritten with glib option parser, ready for xml options to go in
+ * 18/6/20 kleisauke
+ * 	- avoid using vips7 symbols
  */
 
 /*
@@ -62,7 +64,7 @@ Copyright K.Martinez 30/6/93
 #include <vips/internal.h>
 #include <vips/debug.h>
 
-/* We have to represent all header fields as char* so we can spot unset args
+/* We have to represent all header fields as char * so we can spot unset args
  * safely.
  */
 static char *xsize = NULL;
@@ -118,8 +120,8 @@ parse_pint( char *arg, int *out )
 	/* Might as well set an upper limit.
 	 */
 	*out = atoi( arg );
-	if( *out <= 0 || *out > 1000000 ) 
-		error_exit( _( "'%s' is not a positive integer" ), arg );
+	if( *out <= 0 || *out > 1000000 )
+		vips_error_exit( _( "'%s' is not a positive integer" ), arg );
 }
 
 int
@@ -128,8 +130,8 @@ main( int argc, char **argv )
 	GOptionContext *context;
 	GOptionGroup *main_group;
 	GError *error = NULL;
-	IMAGE *im;
-	unsigned char header[IM_SIZEOF_HEADER];
+	VipsImage *im;
+	unsigned char header[VIPS_SIZEOF_HEADER];
 
 	if( VIPS_INIT( argv[0] ) )
 	        vips_error_exit( "%s", _( "unable to start VIPS" ) );
@@ -139,9 +141,9 @@ main( int argc, char **argv )
 	/* On Windows, argv is ascii-only .. use this to get a utf-8 version of
 	 * the args.
 	 */
-#ifdef HAVE_G_WIN32_GET_COMMAND_LINE
+#ifdef G_OS_WIN32
 	argv = g_win32_get_command_line();
-#endif /*HAVE_G_WIN32_GET_COMMAND_LINE*/
+#endif /*G_OS_WIN32*/
 
 	context = g_option_context_new( 
 		_( "vipsedit - edit vips file header" ) );
@@ -151,16 +153,13 @@ main( int argc, char **argv )
 	g_option_group_set_translation_domain( main_group, GETTEXT_PACKAGE );
 	g_option_context_set_main_group( context, main_group );
 
-#ifdef HAVE_G_WIN32_GET_COMMAND_LINE
+#ifdef G_OS_WIN32
 	if( !g_option_context_parse_strv( context, &argv, &error ) ) 
-#else /*!HAVE_G_WIN32_GET_COMMAND_LINE*/
+#else /*!G_OS_WIN32*/
 	if( !g_option_context_parse( context, &argc, &argv, &error ) ) 
-#endif /*HAVE_G_WIN32_GET_COMMAND_LINE*/
+#endif /*G_OS_WIN32*/
 	{
-		if( error ) {
-			fprintf( stderr, "%s\n", error->message );
-		        g_error_free( error );
-		}
+		vips_g_error( &error );
 
 		exit( -1 );
 	}
@@ -174,15 +173,18 @@ main( int argc, char **argv )
 	if( argc != 2 ) { 
 		fprintf( stderr, _( "usage: %s [OPTION...] vips-file\n" ), 
 			g_get_prgname() );
+
 		exit( -1 );
 	}
 
-	if( !(im = im_init( argv[1] )) ||
-		(im->fd = im__open_image_file( im->filename )) == -1 ) 
-		error_exit( _( "could not open image %s" ), argv[1] );
-	if( read( im->fd, header, IM_SIZEOF_HEADER ) != IM_SIZEOF_HEADER ||
-		im__read_header_bytes( im, header ) ) 
-		error_exit( _( "could not read VIPS header for %s" ), 
+	if( !(im = vips_image_new_from_file( argv[1], NULL )) )
+		vips_error_exit( _( "could not open image %s" ), argv[1] );
+
+	vips__seek( im->fd, 0, SEEK_SET );
+	if( read( im->fd, header, VIPS_SIZEOF_HEADER ) !=
+		VIPS_SIZEOF_HEADER ||
+		vips__read_header_bytes( im, header ) )
+		vips_error_exit( _( "could not read VIPS header for %s" ),
 			im->filename );
 
 	if( endian ) {
@@ -190,8 +192,8 @@ main( int argc, char **argv )
 			im->magic = VIPS_MAGIC_INTEL;
 		else if( strcmp( endian, "big" ) == 0 )
 			im->magic = VIPS_MAGIC_SPARC;
-		else 
-			error_exit( _( "bad endian-ness %s, "
+		else
+			vips_error_exit( _( "bad endian-ness %s, "
 				"should be 'big' or 'little'" ), endian );
 	}
 	if( xsize ) 
@@ -201,26 +203,36 @@ main( int argc, char **argv )
 	if( bands ) 
 		parse_pint( bands, &im->Bands );
 	if( format ) {
-		VipsBandFormat f;
+		int f;
 
-		if( (f = im_char2BandFmt( format )) < 0 )
-			error_exit( _( "bad format %s" ), format );
+		if( (f = vips_enum_from_nick( argv[0],
+				VIPS_TYPE_BAND_FORMAT, format )) < 0 )
+			vips_error_exit( _( "bad format %s" ), format );
+
 		im->BandFmt = f;
-		im->Bbits = im_bits_of_fmt( f );
+
+		/* We don't use this, but make sure it's set in case any 
+		 * old binaries are expecting it.
+		 */
+		im->Bbits = vips_format_sizeof( f ) << 3;
 	}
 	if( interpretation ) {
-		VipsInterpretation i;
+		int i;
 
-		if( (i = im_char2Type( interpretation )) < 0 )
-			error_exit( _( "bad interpretation %s" ), 
+		if( (i = vips_enum_from_nick( argv[0], 
+				VIPS_TYPE_INTERPRETATION, interpretation )) < 0 )
+			vips_error_exit( _( "bad interpretation %s" ), 
 				interpretation );
+
 		im->Type = i;
 	}
 	if( coding ) {
-		VipsCoding c;
+		int c;
 
-		if( (c = im_char2Coding( coding )) < 0 )
-			error_exit( _( "bad coding %s" ), coding );
+		if( (c = vips_enum_from_nick( argv[0],
+				VIPS_TYPE_CODING, coding )) < 0 )
+			vips_error_exit( _( "bad coding %s" ), coding );
+
 		im->Coding = c;
 	}
 	if( xres ) 
@@ -232,37 +244,37 @@ main( int argc, char **argv )
 	if( yoffset ) 
 		im->Yoffset = atoi( yoffset );
 
-	if( lseek( im->fd, 0, SEEK_SET ) == (off_t) -1 ) 
-		error_exit( _( "could not seek on %s" ), im->filename );
-	if( im__write_header_bytes( im, header ) ||
-		im__write( im->fd, header, IM_SIZEOF_HEADER ) )
-		error_exit( _( "could not write to %s" ), im->filename );
+	if( vips__seek( im->fd, 0, SEEK_SET ) == (off_t) -1 )
+		vips_error_exit( _( "could not seek on %s" ), im->filename );
+	if( vips__write_header_bytes( im, header ) ||
+		vips__write( im->fd, header, VIPS_SIZEOF_HEADER ) )
+		vips_error_exit( _( "could not write to %s" ), im->filename );
 
 	if( setext ) {
 		char *xml;
 		size_t size;
 
-		if( !(xml = im__file_read( stdin, "stdin", &size )) )
-			error_exit( "%s", _( "could not get ext data" ) );
+		if( !(xml = vips__file_read( stdin, "stdin", &size )) )
+			vips_error_exit( "%s", _( "could not get ext data" ) );
 
 		/* Strip trailing whitespace ... we can get stray \n at the 
-		 * end, eg. "echo | editvips --setext fred.v".
+		 * end, eg. "echo | vipsedit --setext fred.v".
 		 */
 		while( size > 0 && isspace( xml[size - 1] ) )
 			size -= 1;
 
-		if( im__write_extension_block( im, xml, size ) )
-			error_exit( "%s", _( "could not set extension" ) );
-		im_free( xml );
+		if( vips__write_extension_block( im, xml, size ) )
+			vips_error_exit( "%s", _( "could not set extension" ) );
+		g_free( xml );
 	}
 
-	im_close( im );
+	g_object_unref( im );
 
-	/* We don't free this on error exit, sadly.
-	 */
-#ifdef HAVE_G_WIN32_GET_COMMAND_LINE
+	g_option_context_free( context );
+
+#ifdef G_OS_WIN32
 	g_strfreev( argv ); 
-#endif /*HAVE_G_WIN32_GET_COMMAND_LINE*/
+#endif /*G_OS_WIN32*/
 
 	vips_shutdown();
 

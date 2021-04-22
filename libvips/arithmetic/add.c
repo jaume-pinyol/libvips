@@ -185,7 +185,7 @@ vips_add_init( VipsAdd *add )
  * vips_add:
  * @left: input image 
  * @right: input image 
- * @out: output image
+ * @out: (out): output image
  * @...: %NULL-terminated list of optional named arguments
  *
  * This operation calculates @in1 + @in2 and writes the result to @out. 
@@ -261,7 +261,7 @@ vips_add_init( VipsAdd *add )
  * range of possible values.
  *
  * Operations on integer images are performed using the processor's vector unit,
- * if possible. Disable this with --vips-novector or IM_NOVECTOR.
+ * if possible. Disable this with --vips-novector or VIPS_NOVECTOR.
  *
  * See also: vips_subtract(), vips_linear().
  *

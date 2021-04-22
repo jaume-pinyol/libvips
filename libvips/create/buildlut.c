@@ -167,6 +167,8 @@ vips_buildlut_build_init( VipsBuildlut *lut )
 #ifdef DEBUG
 	printf( "Input table, sorted by 1st column\n" );
 	for( y = 0; y < lut->mat->Ysize; y++ ) {
+		int x;
+
 		printf( "%.4d ", y );
 
 		for( x = 0; x < lut->mat->Xsize; x++ )
@@ -271,9 +273,9 @@ vips_buildlut_init( VipsBuildlut *lut )
 }
 
 /**
- * vips_buildlut:
+ * vips_buildlut: (method)
  * @in: input matrix
- * @out: output image
+ * @out: (out): output image
  * @...: %NULL-terminated list of optional named arguments
  *
  * This operation builds a lookup table from a set of points. Intermediate

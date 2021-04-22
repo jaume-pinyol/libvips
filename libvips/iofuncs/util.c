@@ -48,15 +48,18 @@
 #ifdef HAVE_UNISTD_H
 #include <unistd.h>
 #endif /*HAVE_UNISTD_H*/
+#ifdef HAVE_IO_H
+#include <io.h>
+#endif /*HAVE_IO_H*/
 #include <fcntl.h>
-
-#ifdef OS_WIN32
-#include <windows.h>
-#endif /*OS_WIN32*/
 
 #include <vips/vips.h>
 #include <vips/debug.h>
 #include <vips/internal.h>
+
+#ifdef G_OS_WIN32
+#include <windows.h>
+#endif /*G_OS_WIN32*/
 
 /* Temp buffer for snprintf() layer on old systems.
  */
@@ -64,13 +67,13 @@
 
 /* Try to make an O_BINARY ... sometimes need the leading '_'.
  */
-#ifdef BINARY_OPEN
+#ifdef G_PLATFORM_WIN32
 #ifndef O_BINARY
 #ifdef _O_BINARY
 #define O_BINARY _O_BINARY
 #endif /*_O_BINARY*/
 #endif /*!O_BINARY*/
-#endif /*BINARY_OPEN*/
+#endif /*G_PLATFORM_WIN32*/
 
 /* If we have O_BINARY, add it to a mode flags set.
  */
@@ -219,10 +222,10 @@ vips_slist_filter( GSList *list, VipsSListMap2Fn fn, void *a, void *b )
 static void
 vips_slist_free_all_cb( void * thing, void * dummy )
 {
-	vips_free( thing );
+	g_free( thing );
 }
 
-/* Free a g_slist of things which need vips_free()ing.
+/* Free a g_slist of things which need g_free()ing.
  */
 void
 vips_slist_free_all( GSList *list )
@@ -330,7 +333,7 @@ vips_iscasepostfix( const char *a, const char *b )
 	if( n > m )
 		return( FALSE );
 
-	return( strcasecmp( a + m - n, b ) == 0 );
+	return( g_ascii_strcasecmp( a + m - n, b ) == 0 );
 }
 
 /* Test for string a starts string b. a is a known-good string, b may be
@@ -354,10 +357,46 @@ vips_isprefix( const char *a, const char *b )
 	return( TRUE );
 }
 
+/* Exactly like strcspn(), but allow \ as an escape character.
+ *
+ * strspne( "hello world", " " ) == 5
+ * strspne( "hello\\ world", " " ) == 12
+ */
+static size_t
+strcspne( const char *s, const char *reject )
+{
+	size_t skip;
+
+	/* If \ is one of the reject chars, no need for any looping.
+	 */
+	if( strchr( reject, '\\' ) )
+		return( strcspn( s, reject ) );
+
+	skip = 0;
+	for(;;) { 
+		skip += strcspn( s + skip, reject );
+
+		/* s[skip] is at the start of the string, or the end, or on a
+		 * break character.
+		 */
+		if( skip == 0 ||
+			!s[skip] ||
+			s[skip - 1] != '\\' )
+			break;
+
+		/* So skip points at break char and we have a '\' in the char
+		 * before. Step over the break.
+		 */
+		skip += 1;
+	}
+
+	return( skip );
+}
+
 /* Like strtok(). Give a string and a list of break characters. Then:
  * - skip initial break characters
  * - EOS? return NULL
- * - skip a series of non-break characters
+ * - skip a series of non-break characters, allow `\` as a break escape
  * - write a '\0' over the next break character and return a pointer to the
  *   char after that
  *
@@ -385,15 +424,22 @@ vips_isprefix( const char *a, const char *b )
  *
  * for( i = 0; p; p = vips_break_token( p, " " ) )
  *   v[i] = atoi( p );
+ *
+ * You can use \ to escape breaks, for example:
+ *
+ * vips_break_token( "hello\ world", " " ) will see a single token containing
+ * a space. The \ characters are squashed out.
  */
 char *
 vips_break_token( char *str, const char *brk )
 {
         char *p;
+        char *q;
 
         /* Is the string empty? If yes, return NULL immediately.
          */
-        if( !str || !*str )
+        if( !str || 
+		!*str )
                 return( NULL );
 
         /* Skip initial break characters.
@@ -406,9 +452,9 @@ vips_break_token( char *str, const char *brk )
 		return( NULL );
 
         /* We have a token ... search for the first break character after the 
-	 * token.
+	 * token. strcspne() allows '\' to escape breaks, see above.
          */
-        p += strcspn( p, brk );
+        p += strcspne( p, brk );
 
         /* Is there string left?
          */
@@ -419,6 +465,17 @@ vips_break_token( char *str, const char *brk )
                 *p++ = '\0';
                 p += strspn( p, brk );
         }
+
+	/* There may be escaped break characters in str. Loop, squashing them
+	 * out.
+	 */
+	for( q = strchr( str, '\\' ); q && *q; q = strchr( q, '\\' ) ) {
+		memmove( q, q + 1, strlen( q ) );
+
+		/* If there's \\, we don't want to squash out the second \.
+		 */
+		q += 1;
+	}
 
         return( p );
 }
@@ -441,8 +498,8 @@ vips_vsnprintf( char *str, size_t size, const char *format, va_list ap )
 	 */
 	if( size > MAX_BUF )
 		vips_error_exit( "panic: buffer overflow "
-			"(request to write %d bytes to buffer of %d bytes)",
-			size, MAX_BUF );
+			"(request to write %lu bytes to buffer of %d bytes)",
+			(unsigned long) size, MAX_BUF );
 	n = vsprintf( buf, format, ap );
 	if( n > MAX_BUF )
 		vips_error_exit( "panic: buffer overflow "
@@ -505,15 +562,15 @@ vips_filename_suffix_match( const char *path, const char *suffixes[] )
 gint64
 vips_file_length( int fd )
 {
-#ifdef OS_WIN32
+#ifdef G_OS_WIN32
 	struct _stati64 st;
 
 	if( _fstati64( fd, &st ) == -1 ) {
-#else /*!OS_WIN32*/
+#else /*!G_OS_WIN32*/
 	struct stat st;
 
 	if( fstat( fd, &st ) == -1 ) {
-#endif /*OS_WIN32*/
+#endif /*G_OS_WIN32*/
 		vips_error_system( errno, "vips_file_length", 
 			"%s", _( "unable to get file stats" ) );
 		return( -1 );
@@ -543,36 +600,48 @@ vips__write( int fd, const void *buf, size_t count )
 	return( 0 );
 }
 
+#ifdef G_OS_WIN32
+/* Set the create date on a file. On Windows, the create date may be copied 
+ * over from an existing file of the same name, unless you reset it. 
+ *
+ * See https://blogs.msdn.microsoft.com/oldnewthing/20050715-14/?p=34923
+ */
+void
+vips__set_create_time( int fd )
+{
+	HANDLE handle;
+	SYSTEMTIME st;
+	FILETIME ft;
+
+	if( (handle = _get_osfhandle( fd )) == INVALID_HANDLE_VALUE )
+		return;
+	GetSystemTime( &st );
+	SystemTimeToFileTime( &st, &ft );
+	SetFileTime( handle, &ft, &ft, &ft );
+}
+#endif /*G_OS_WIN32*/
+
 /* open() with a utf8 filename, setting errno.
  */
 int
-vips__open( const char *filename, int flags, ... )
+vips__open( const char *filename, int flags, int mode )
 {
 	int fd;
-	mode_t mode;
-	va_list ap;
 
-	va_start( ap, flags );
-	mode = va_arg( ap, int );
-	va_end( ap );
-
-#ifdef OS_WIN32
-{
-	wchar_t *path16;
-
-	if( !(path16 = (wchar_t *) 
-		g_utf8_to_utf16( filename, -1, NULL, NULL, NULL )) ) { 
-		errno = EACCES;
+	/* Various bad things happen if you accidentally open a directory as a
+	 * file.
+	 */
+	if( g_file_test( filename, G_FILE_TEST_IS_DIR ) ) {
+		errno = EISDIR;
 		return( -1 );
 	}
 
-	fd = _wopen( path16, flags, mode );
+	fd = g_open( filename, flags, mode );
 
-	g_free( path16 );
-}
-#else /*!OS_WIN32*/
-	fd = open( filename, flags, mode );
-#endif
+#ifdef G_OS_WIN32
+	if( mode & O_CREAT )
+		vips__set_create_time( fd ); 
+#endif /*G_OS_WIN32*/
 
 	return( fd );
 }
@@ -580,7 +649,7 @@ vips__open( const char *filename, int flags, ... )
 int 
 vips__open_read( const char *filename )
 {
-	return( vips__open( filename, MODE_READONLY ) );
+	return( vips__open( filename, MODE_READONLY, 0 ) );
 }
 
 /* fopen() with utf8 filename and mode, setting errno.
@@ -590,29 +659,12 @@ vips__fopen( const char *filename, const char *mode )
 {
 	FILE *fp;
 
-#ifdef OS_WIN32
-	wchar_t *path16, *mode16;
-	
-	if( !(path16 = (wchar_t *) 
-		g_utf8_to_utf16( filename, -1, NULL, NULL, NULL )) ) { 
-		errno = EACCES;
-		return( NULL );
-	}
+	fp = g_fopen( filename, mode );
 
-	if( !(mode16 = (wchar_t *) 
-		g_utf8_to_utf16( mode, -1, NULL, NULL, NULL )) ) { 
-		g_free( path16 );
-		errno = EACCES;
-		return( NULL );
-	}
-
-	fp = _wfopen( path16, mode16 );
-
-	g_free( path16 );
-	g_free( mode16 );
-#else /*!OS_WIN32*/
-	fp = fopen( filename, mode );
-#endif
+#ifdef G_OS_WIN32
+	if( mode[0] == 'w' )
+		vips__set_create_time( _fileno( fp ) ); 
+#endif /*G_OS_WIN32*/
 
 	return( fp );
 }
@@ -646,14 +698,14 @@ vips__file_open_read( const char *filename, const char *fallback_dir,
 	char *mode;
 	FILE *fp;
 
-#ifdef BINARY_OPEN
+#ifdef G_PLATFORM_WIN32
 	if( text_mode )
 		mode = "r";
 	else
 		mode = "rb";
-#else /*BINARY_OPEN*/
+#else /*!G_PLATFORM_WIN32*/
 	mode = "r";
-#endif /*BINARY_OPEN*/
+#endif /*G_PLATFORM_WIN32*/
 
 	if( (fp = vips__fopen( filename, mode )) )
 		return( fp );
@@ -682,14 +734,14 @@ vips__file_open_write( const char *filename, gboolean text_mode )
 	char *mode;
 	FILE *fp;
 
-#ifdef BINARY_OPEN
+#ifdef G_PLATFORM_WIN32
 	if( text_mode )
 		mode = "w";
 	else
 		mode = "wb";
-#else /*BINARY_OPEN*/
+#else /*!G_PLATFORM_WIN32*/
 	mode = "w";
-#endif /*BINARY_OPEN*/
+#endif /*G_PLATFORM_WIN32*/
 
         if( !(fp = vips__fopen( filename, mode )) ) {
 		vips_error_system( errno, "vips__file_open_write", 
@@ -731,8 +783,11 @@ vips__file_read( FILE *fp, const char *filename, size_t *length_out )
 		do {
 			char *str2;
 
+			/* Again, a 1gb sanity limit.
+			 */
 			size += 1024;
-			if( !(str2 = realloc( str, size )) ) {
+			if( size > 1024 * 1024 * 1024 ||
+				!(str2 = realloc( str, size )) ) {
 				free( str ); 
 				vips_error( "vips__file_read", 
 					"%s", _( "out of memory" ) );
@@ -760,7 +815,7 @@ vips__file_read( FILE *fp, const char *filename, size_t *length_out )
 		rewind( fp );
 		read = fread( str, sizeof( char ), (size_t) len, fp );
 		if( read != (size_t) len ) {
-			vips_free( str );
+			g_free( str );
 			vips_error( "vips__file_read", 
 				_( "error reading from file \"%s\"" ), 
 				filename );
@@ -817,33 +872,28 @@ vips__file_write( void *data, size_t size, size_t nmemb, FILE *stream )
 	return( 0 );
 }
 
-/* Read a few bytes from the start of a file. For sniffing file types.
- * Filename may contain a mode. 
+/* Read a few bytes from the start of a file. This is used for sniffing file 
+ * types, so we must read binary. 
+ *
+ * Return the number of bytes actually read (the file might be shorter than
+ * len), or -1 for error.
  */
-int
-vips__get_bytes( const char *filename, unsigned char buf[], int len )
+gint64
+vips__get_bytes( const char *filename, unsigned char buf[], gint64 len )
 {
-	char name[FILENAME_MAX];
-	char mode[FILENAME_MAX];
 	int fd;
-
-	/* Split off the mode part.
-	 */
-	im_filename_split( filename, name, mode );
+	gint64 bytes_read;
 
 	/* File may not even exist (for tmp images for example!)
 	 * so no hasty messages. And the file might be truncated, so no error
 	 * on read either.
 	 */
-	if( (fd = vips__open_read( name )) == -1 )
+	if( (fd = vips__open_read( filename )) == -1 )
 		return( 0 );
-	if( read( fd, buf, len ) != len ) {
-		close( fd );
-		return( 0 );
-	}
+	bytes_read = read( fd, buf, len );
 	close( fd );
 
-	return( 1 );
+	return( bytes_read );
 }
 
 /* We try to support stupid DOS files too. These have \r\n (13, 10) as line
@@ -894,7 +944,7 @@ vips__gvalue_copy( GValue *value )
 }
 
 static void
-vips__gvalue_free( GValue *value )
+vips__gvalue_free( GValue *value, void *user_data )
 {
 	g_value_unset( value );
 	g_free( value );
@@ -980,7 +1030,7 @@ vips__gslist_gvalue_merge( GSList *a, const GSList *b )
 	return( a );
 }
 
-/* Make a char* from GSList of GValue. Each GValue should be a ref_string.
+/* Make a char * from GSList of GValue. Each GValue should be a ref_string.
  * free the result. Empty list -> "", not NULL. Join strings with '\n'.
  */
 char *
@@ -1034,31 +1084,38 @@ vips__gslist_gvalue_get( const GSList *list )
 	return( all );
 }
 
+gint64
+vips__seek_no_error( int fd, gint64 pos, int whence )
+{
+	gint64 new_pos;
+
+#ifdef G_OS_WIN32
+	new_pos = _lseeki64( fd, pos, whence );
+#else /*!G_OS_WIN32*/
+	/* On error, eg. opening a directory and seeking to the end, lseek() 
+	 * on linux seems to return 9223372036854775807 ((1 << 63) - 1)
+	 * rather than (off_t) -1 for reasons I don't understand. 
+	 */
+	new_pos = lseek( fd, pos, whence );
+#endif /*G_OS_WIN32*/
+
+	return( new_pos );
+}
+
 /* Need our own seek(), since lseek() on win32 can't do long files.
  */
-int
-vips__seek( int fd, gint64 pos )
+gint64
+vips__seek( int fd, gint64 pos, int whence )
 {
-#ifdef OS_WIN32
-{
-	HANDLE hFile = (HANDLE) _get_osfhandle( fd );
-	LARGE_INTEGER p;
+	gint64 new_pos;
 
-	p.QuadPart = pos;
-	if( !SetFilePointerEx( hFile, p, NULL, FILE_BEGIN ) ) {
-                vips_error_system( GetLastError(), "vips__seek", 
+	if( (new_pos = vips__seek_no_error( fd, pos, whence )) == -1 ) {
+		vips_error_system( errno, "vips__seek", 
 			"%s", _( "unable to seek" ) );
 		return( -1 );
 	}
-}
-#else /*!OS_WIN32*/
-	if( lseek( fd, pos, SEEK_SET ) == (off_t) -1 ) {
-		vips_error( "vips__seek", "%s", _( "unable to seek" ) );
-		return( -1 );
-	}
-#endif /*OS_WIN32*/
 
-	return( 0 );
+	return( new_pos );
 }
 
 /* Need our own ftruncate(), since ftruncate() on win32 can't do long files.
@@ -1071,13 +1128,11 @@ vips__seek( int fd, gint64 pos )
 int
 vips__ftruncate( int fd, gint64 pos )
 {
-#ifdef OS_WIN32
+#ifdef G_OS_WIN32
 {
 	HANDLE hFile = (HANDLE) _get_osfhandle( fd );
-	LARGE_INTEGER p;
 
-	p.QuadPart = pos;
-	if( vips__seek( fd, pos ) )
+	if( vips__seek( fd, pos, SEEK_SET ) == -1 )
 		return( -1 );
 	if( !SetEndOfFile( hFile ) ) {
                 vips_error_system( GetLastError(), "vips__ftruncate", 
@@ -1085,69 +1140,55 @@ vips__ftruncate( int fd, gint64 pos )
 		return( -1 );
 	}
 }
-#else /*!OS_WIN32*/
+#else /*!G_OS_WIN32*/
 	if( ftruncate( fd, pos ) ) {
 		vips_error_system( errno, "vips__ftruncate", 
 			"%s", _( "unable to truncate" ) );
 		return( -1 );
 	}
-#endif /*OS_WIN32*/
+#endif /*G_OS_WIN32*/
 
 	return( 0 );
 }
 
-/* Test for file exists.
+/* TRUE if file exists. True for directories as well.
  */
-int
+gboolean
 vips_existsf( const char *name, ... )
 {
         va_list ap;
 	char *path; 
-        int result; 
+        gboolean result; 
 
         va_start( ap, name );
 	path = g_strdup_vprintf( name, ap ); 
         va_end( ap );
 
-        result = g_access( path, R_OK );
+	result = g_file_test( path, G_FILE_TEST_EXISTS );
 
 	g_free( path ); 
 
-        return( !result );
+	return( result ); 
 }
 
-#ifdef OS_WIN32
-#ifndef popen
-#define popen(b,m) _popen(b,m)
-#endif
-#ifndef pclose
-#define pclose(f) _pclose(f)
-#endif
-#endif /*OS_WIN32*/
-
-/* Do popen(), with printf-style args.
+/* TRUE if file exists and is a directory.
  */
-FILE *
-vips_popenf( const char *fmt, const char *mode, ... )
+gboolean
+vips_isdirf( const char *name, ... )
 {
-        va_list args;
-	char buf[VIPS_PATH_MAX];
-	FILE *fp;
+        va_list ap;
+	char *path; 
+        gboolean result; 
 
-        va_start( args, mode );
-        (void) vips_vsnprintf( buf, VIPS_PATH_MAX, fmt, args );
-        va_end( args );
+        va_start( ap, name );
+	path = g_strdup_vprintf( name, ap ); 
+        va_end( ap );
 
-#ifdef DEBUG
-	printf( "vips_popenf: running: %s\n", buf );
-#endif /*DEBUG*/
+	result = g_file_test( path, G_FILE_TEST_IS_DIR );
 
-        if( !(fp = popen( buf, mode )) ) {
-		vips_error( "popenf", "%s", strerror( errno ) );
-		return( NULL );
-	}
+	g_free( path ); 
 
-	return( fp );
+	return( result ); 
 }
 
 /* Make a directory.
@@ -1481,7 +1522,7 @@ vips__find_rightmost_brackets( const char *p )
 
 	/* Too many tokens?
 	 */
-	if( n == MAX_TOKENS )
+	if( n >= MAX_TOKENS )
 		return( NULL );
 
 	/* No rightmost close bracket?
@@ -1561,16 +1602,13 @@ vips_ispoweroftwo( int p )
 int
 vips_amiMSBfirst( void )
 {
-        int test;
-        unsigned char *p = (unsigned char *) &test;
-
-        test = 0;
-        p[0] = 255;
-
-        if( test == 255 )
-                return( 0 );
-        else
-                return( 1 );
+#if G_BYTE_ORDER == G_BIG_ENDIAN
+	return( 1 );
+#elif G_BYTE_ORDER == G_LITTLE_ENDIAN
+	return( 0 );
+#else
+#error "Byte order not recognised"
+#endif
 }
 
 /* Return the tmp dir. On Windows, GetTempPath() will also check the values of 
@@ -1582,7 +1620,7 @@ vips__temp_dir( void )
 	const char *tmpd;
 
 	if( !(tmpd = g_getenv( "TMPDIR" )) ) {
-#ifdef OS_WIN32
+#ifdef G_OS_WIN32
 		static gboolean done = FALSE;
 		static char buf[256];
 
@@ -1591,9 +1629,9 @@ vips__temp_dir( void )
 				strcpy( buf, "C:\\temp" );
 		}
 		tmpd = buf;
-#else /*!OS_WIN32*/
+#else /*!G_OS_WIN32*/
 		tmpd = "/tmp";
-#endif /*!OS_WIN32*/
+#endif /*!G_OS_WIN32*/
 	}
 
 	return( tmpd );
@@ -1602,32 +1640,32 @@ vips__temp_dir( void )
 /* Make a temporary file name. The format parameter is something like "%s.jpg" 
  * and will be expanded to something like "/tmp/vips-12-34587.jpg".
  *
- * You need to free the result. A real file will also be created, though we
- * delete it for you.
+ * You need to free the result. 
  */
 char *
 vips__temp_name( const char *format )
 {
-	static int serial = 1;
+	static int global_serial = 0;
 
 	char file[FILENAME_MAX];
 	char file2[FILENAME_MAX];
-
 	char *name;
-	int fd;
 
-	vips_snprintf( file, FILENAME_MAX, "vips-%d-XXXXXX", serial++ );
+	int serial = g_atomic_int_add( &global_serial, 1 );
+
+	vips_snprintf( file, FILENAME_MAX, "vips-%d-%u", 
+		serial, g_random_int() );
 	vips_snprintf( file2, FILENAME_MAX, format, file );
 	name = g_build_filename( vips__temp_dir(), file2, NULL );
 
-	if( (fd = g_mkstemp( name )) == -1 ) {
-		vips_error( "tempfile", 
-			_( "unable to make temporary file %s" ), name );
-		g_free( name );
-		return( NULL );
-	}
-	close( fd );
-	g_unlink( name );
+	/* We could use something like g_mkstemp() to guarantee uniqueness
+	 * across processes, but the extra FS calls can be difficult for 
+	 * selinux.
+	 *
+	 * g_random_int() should be safe enough -- it's seeded from time(), so
+	 * it ought not to collide often -- and on linux at least we never 
+	 * actually use these filenames in the filesystem anyway.
+	 */
 
 	return( name );
 }
@@ -1806,7 +1844,6 @@ vips_flags_from_nick( const char *domain, GType type, const char *nick )
 	return( -1 );
 }
 
-
 /* Scan @buf for the first "%ns" (eg. "%12s") and substitute the 
  * lowest-numbered one for @sub. @buf is @len bytes in size.
  *
@@ -1880,24 +1917,10 @@ vips_realpath( const char *path )
 {
 	char *real;
 
-#ifdef HAVE_REALPATH
-{
-	char *real2;
-
-	if( !(real = realpath( path, NULL )) ) {
-		vips_error_system( errno, "vips_realpath",
-			"%s", _( "unable to form filename" ) ); 
-		return( NULL );
-	}
-
-	/* We must return a path that can be freed with g_free().
+	/* It'd be nice to use realpath here, but sadly that won't work on
+	 * linux systems with grsec, since it works by opening /proc/self/fd.
 	 */
-	real2 = g_strdup( real );
-	free( real );
-	real = real2;
-}
-#else /*!HAVE_REALPATH*/
-{
+
 	if( !g_path_is_absolute( path ) ) {
 		char *cwd;
 
@@ -1907,8 +1930,6 @@ vips_realpath( const char *path )
 	}
 	else
 		real = g_strdup( path );
-}
-#endif
 
 	return( real );
 }
@@ -1933,7 +1954,7 @@ vips__random_add( guint32 seed, int value )
 static void *
 vips_icc_dir_once( void *null )
 {
-#ifdef OS_WIN32
+#ifdef G_OS_WIN32
 	/* From glib get_windows_directory_root()
 	 */
 	wchar_t wwindowsdir[MAX_PATH];
@@ -1955,7 +1976,7 @@ vips_icc_dir_once( void *null )
 			return( (void *) full_path );
 		}
 	}
-#endif
+#endif /*G_OS_WIN32*/
 
 	return( (void *) VIPS_ICC_DIR );
 }
@@ -1966,10 +1987,10 @@ vips__icc_dir( void )
 	static GOnce once = G_ONCE_INIT;
 
 	return( (const char *) g_once( &once, 
-		(GThreadFunc) vips_icc_dir_once, NULL ) );
+		vips_icc_dir_once, NULL ) );
 }
 
-#ifdef OS_WIN32
+#ifdef G_OS_WIN32
 static HMODULE vips__dll = NULL;
 #ifdef DLL_EXPORT
 BOOL WINAPI
@@ -1981,19 +2002,19 @@ DllMain( HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved )
 	return( TRUE );
 }
 #endif
-#endif
+#endif /*G_OS_WIN32*/
 
 static void *
 vips__windows_prefix_once( void *null )
 {
 	char *prefix;
 
-#ifdef OS_WIN32
+#ifdef G_OS_WIN32
 	prefix = g_win32_get_package_installation_directory_of_module( 
-		vips__dll ),
-#else
+		vips__dll );
+#else /*!G_OS_WIN32*/
         prefix = (char *) g_getenv( "VIPSHOME" );
-#endif
+#endif /*G_OS_WIN32*/
 
 	return( (void *) prefix ); 
 }
@@ -2004,5 +2025,60 @@ vips__windows_prefix( void )
 	static GOnce once = G_ONCE_INIT;
 
 	return( (const char *) g_once( &once, 
-		(GThreadFunc) vips__windows_prefix_once, NULL ) );
+		vips__windows_prefix_once, NULL ) );
+}
+
+char *
+vips__get_iso8601( void )
+{
+	char *date;
+
+#ifdef HAVE_DATE_TIME_FORMAT_ISO8601
+{
+	GDateTime *now;
+
+	now = g_date_time_new_now_local();
+	date = g_date_time_format_iso8601( now );
+	g_date_time_unref( now );
+}
+#else /*!HAVE_DATE_TIME_FORMAT_ISO8601*/
+{
+	GTimeVal now;
+
+	g_get_current_time( &now );
+	date = g_time_val_to_iso8601( &now ); 
+}
+#endif /*HAVE_DATE_TIME_FORMAT_ISO8601*/
+
+	return( date );
+}
+
+/* Convert a string to a double in the ASCII locale (ie. decimal point is
+ * ".").
+ */
+int
+vips_strtod( const char *str, double *out )
+{
+	const char *p;
+
+	*out = 0;
+
+	/* The str we fetched must contain at least 1 digit. This 
+	 * helps stop us trying to convert "MATLAB" (for example) to 
+	 * a number and getting zero.
+	 */
+	for( p = str; *p; p++ )
+		if( isdigit( *p ) )
+			break;
+	if( !*p ) 
+		return( -1 );
+
+	/* This will fail for out of range numbers, like 1e343434, but
+	 * is quite happy with eg. "banana".
+	 */
+	*out = g_ascii_strtod( str, NULL );
+	if( errno ) 
+		return( -1 );
+
+	return( 0 );
 }

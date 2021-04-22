@@ -45,6 +45,7 @@
 #include <string.h>
 
 #include <vips/vips.h>
+#include <vips/vips7compat.h>
 
 int
 im_vips2dz( IMAGE *in, const char *filename )
@@ -74,6 +75,8 @@ im_vips2dz( IMAGE *in, const char *filename )
 		*p = '\0';
 		im_strncpy( mode, p + 1, FILENAME_MAX ); 
 	}
+	else 
+		strcpy( mode, "" ); 
 
 	strcpy( buf, mode ); 
 	p = &buf[0];

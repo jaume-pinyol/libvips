@@ -14,6 +14,10 @@
  * 	- redo as a set of fns ready for wrapping in a new-style class
  * 17/9/16
  * 	- tag output as scRGB
+ * 16/8/18
+ * 	- shut down the input file as soon as we can [kleisauke]
+ * 19/8/18
+ * 	- scale alpha up to 0 - 255 to match the rest of libvips
  */
 
 /*
@@ -107,7 +111,7 @@ vips__openexr_isexr( const char *filename )
 {
 	unsigned char buf[4];
 
-	if( vips__get_bytes( filename, buf, 4 ) )
+	if( vips__get_bytes( filename, buf, 4 ) == 4 )
 		if( buf[0] == 0x76 && buf[1] == 0x2f &&
 			buf[2] == 0x31 && buf[3] == 0x01 )
 			return( TRUE );
@@ -122,14 +126,20 @@ get_imf_error( void )
 }
 
 static void
+read_close( Read *read )
+{
+	VIPS_FREEF( ImfCloseTiledInputFile, read->tiles );
+	VIPS_FREEF( ImfCloseInputFile, read->lines );
+}
+
+static void
 read_destroy( VipsImage *out, Read *read )
 {
 	VIPS_FREE( read->filename );
 
-	VIPS_FREEF( ImfCloseTiledInputFile, read->tiles );
-	VIPS_FREEF( ImfCloseInputFile, read->lines );
+	read_close( read ); 
 
-	vips_free( read );
+	g_free( read );
 }
 
 static Read *
@@ -216,7 +226,11 @@ read_header( Read *read, VipsImage *out )
 		 VIPS_FORMAT_FLOAT,
 		 VIPS_CODING_NONE, VIPS_INTERPRETATION_scRGB, 1.0, 1.0 );
 	if( read->tiles )
-		vips_image_pipelinev( out, VIPS_DEMAND_STYLE_SMALLTILE, NULL );
+		/* Even though this is a tiled reader, we hint thinstrip 
+		 * since with the cache we are quite happy serving that if 
+		 * anything downstream would like it.
+		 */
+		vips_image_pipelinev( out, VIPS_DEMAND_STYLE_THINSTRIP, NULL );
 	else
 		vips_image_pipelinev( out, VIPS_DEMAND_STYLE_FATSTRIP, NULL );
 }
@@ -229,6 +243,7 @@ vips__openexr_read_header( const char *filename, VipsImage *out )
 	if( !(read = read_new( filename, out )) )
 		return( -1 );
 	read_header( read, out );
+	read_close( read );
 
 	return( 0 );
 }
@@ -324,8 +339,16 @@ vips__openexr_generate( VipsRegion *out,
 				float *q = (float *) VIPS_REGION_ADDR( out,
 					hit.left, hit.top + z );
 
+				int i;
+
 				ImfHalfToFloatArray( 4 * hit.width, 
 					(ImfHalf *) p, q );
+
+				/* oexr uses 0 - 1 for alpha, but vips is 
+				 * always 0 - 255, even for scrgb images.
+				 */
+				for( i = 0; i < hit.width; i++ ) 
+					q[4 * i + 3] *= 255;
 			}
 		}
 
@@ -344,7 +367,8 @@ vips__openexr_read( const char *filename, VipsImage *out )
 		VipsImage *raw;
 		VipsImage *t;
 
-		/* Tile cache: keep enough for two complete rows of tiles.
+		/* Tile cache: keep enough for two complete rows of tiles,
+		 * plus 50%.
 		 */
 		raw = vips_image_new();
 		vips_object_local( out, raw );
@@ -356,14 +380,11 @@ vips__openexr_read( const char *filename, VipsImage *out )
 			read, NULL ) )
 			return( -1 );
 
-		/* Copy to out, adding a cache. Enough tiles for a complete 
-		 * row, plus 50%.
-		 */
 		if( vips_tilecache( raw, &t, 
 			"tile_width", read->tile_width, 
 			"tile_height", read->tile_height,
 			"max_tiles", (int) 
-				(1.5 * (1 + raw->Xsize / read->tile_width)),
+				(2.5 * (1 + raw->Xsize / read->tile_width)),
 			NULL ) ) 
 			return( -1 );
 		if( vips_image_write( t, out ) ) {
@@ -389,6 +410,8 @@ vips__openexr_read( const char *filename, VipsImage *out )
 		read_header( read, out );
 
 		for( y = 0; y < height; y++ ) {
+			int i;
+
 			if( !ImfInputSetFrameBuffer( read->lines,
 				imf_buffer - left - (top + y) * width,
 				1, width ) ) {
@@ -404,10 +427,18 @@ vips__openexr_read( const char *filename, VipsImage *out )
 			ImfHalfToFloatArray( 4 * width, 
 				(ImfHalf *) imf_buffer, vips_buffer );
 
+			/* oexr uses 0 - 1 for alpha, but vips is always 0 -
+			 * 255, even for scrgb images.
+			 */
+			for( i = 0; i < width; i++ ) 
+				vips_buffer[4 * i + 3] *= 255;
+
 			if( vips_image_write_line( out, y, 
 				(VipsPel *) vips_buffer ) )
 				return( -1 );
 		}
+
+		read_close( read ); 
 	}
 
 	return( 0 );

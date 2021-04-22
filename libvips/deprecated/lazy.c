@@ -46,6 +46,7 @@
 #include <string.h>
 
 #include <vips/vips.h>
+#include <vips/vips7compat.h>
 #include <vips/debug.h>
 #include <vips/internal.h>
 
@@ -306,8 +307,7 @@ vips__deprecated_open_read( const char *filename, gboolean sequential )
 		/* Yuk. Can't g_object_set() filename since it's after
 		 * construct. Just zap the new filename in.
 		 */
-		VIPS_FREE( image->filename );
-		image->filename = g_strdup( filename );
+		VIPS_SETSTR( image->filename, filename ); 
 
 		return( image );
 	}

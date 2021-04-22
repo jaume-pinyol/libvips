@@ -2,6 +2,10 @@
  *
  * 22/5/14
  * 	- from vips_mosaic()
+ * 4/9/18
+ * 	- add docs for transform output
+ * 18/6/20 kleisauke
+ * 	- convert to vips8
  */
 
 /*
@@ -29,11 +33,6 @@
 
     These files are distributed with VIPS - http://www.vips.ecs.soton.ac.uk
 
- */
-
-/* This is a simple wrapper over the old vips7 functions. At some point we
- * should rewrite this as a pure vips8 class and redo the vips7 functions as
- * wrappers over this.
  */
 
 #ifdef HAVE_CONFIG_H
@@ -100,7 +99,7 @@ vips_mosaic_build( VipsObject *object )
 
 	switch( mosaic->direction ) { 
 	case VIPS_DIRECTION_HORIZONTAL:
-		if( im__find_lroverlap( mosaic->ref, mosaic->sec, x,
+		if( vips__find_lroverlap( mosaic->ref, mosaic->sec, x,
 			mosaic->bandno, 
 			mosaic->xref, mosaic->yref, mosaic->xsec, mosaic->ysec,
 			mosaic->hwindow, mosaic->harea, 
@@ -114,7 +113,7 @@ vips_mosaic_build( VipsObject *object )
 		break;
 
 	case VIPS_DIRECTION_VERTICAL:
-		if( im__find_tboverlap( mosaic->ref, mosaic->sec, x,
+		if( vips__find_tboverlap( mosaic->ref, mosaic->sec, x,
 			mosaic->bandno, 
 			mosaic->xref, mosaic->yref, mosaic->xsec, mosaic->ysec,
 			mosaic->hwindow, mosaic->harea, 
@@ -196,7 +195,7 @@ vips_mosaic_class_init( VipsMosaicClass *class )
 
 	VIPS_ARG_ENUM( class, "direction", 4, 
 		_( "Direction" ), 
-		_( "Horizontal or vertcial mosaic" ),
+		_( "Horizontal or vertical mosaic" ),
 		VIPS_ARGUMENT_REQUIRED_INPUT, 
 		G_STRUCT_OFFSET( VipsMosaic, direction ), 
 		VIPS_TYPE_DIRECTION, VIPS_DIRECTION_HORIZONTAL ); 
@@ -314,7 +313,7 @@ vips_mosaic_init( VipsMosaic *mosaic )
  * vips_mosaic:
  * @ref: reference image
  * @sec: secondary image
- * @out: output image
+ * @out: (out): output image
  * @direction: horizontal or vertical join
  * @xref: position in reference image
  * @yref: position in reference image
@@ -328,6 +327,12 @@ vips_mosaic_init( VipsMosaic *mosaic )
  * * @hwindow: %gint, half window size
  * * @harea: %gint, half search size 
  * * @mblend: %gint, maximum blend size
+ * * @dx0: %gint, output, detected displacement
+ * * @dy0: %gint, output, detected displacement
+ * * @scale1: %gdouble, output, detected first order scale
+ * * @angle1: %gdouble, output, detected first order rotation
+ * * @dx1: %gdouble, output, detected first order displacement
+ * * @dy1: %gdouble, output, detected first order displacement
  *
  * This operation joins two images left-right (with @ref on the left) or
  * top-bottom (with @ref above) given an approximate overlap.
@@ -344,6 +349,9 @@ vips_mosaic_init( VipsMosaic *mosaic )
  *
  * The detected displacement is used with vips_merge() to join the two images
  * together. 
+ *
+ * You can read out the detected transform with @dx0, @dy0, @scale1, @angle1,
+ * @dx1, @dy1.
  *
  * See also: vips_merge(), vips_insert().
  *

@@ -133,11 +133,8 @@ typedef enum {
 	VIPS_ACCESS_LAST
 } VipsAccess;
 
-struct _VipsImage; 
-struct _VipsRegion; 
-
-typedef void *(*VipsStartFn)( struct _VipsImage *out, void *a, void *b );
-typedef int (*VipsGenerateFn)( struct _VipsRegion *out, 
+typedef void *(*VipsStartFn)( VipsImage *out, void *a, void *b );
+typedef int (*VipsGenerateFn)( VipsRegion *out, 
 	void *seq, void *a, void *b, gboolean *stop );
 typedef int (*VipsStopFn)( void *seq, void *a, void *b );
 
@@ -146,7 +143,7 @@ typedef int (*VipsStopFn)( void *seq, void *a, void *b );
  */
 typedef struct _VipsProgress {
 	/*< private >*/
-	struct _VipsImage *im;	/* Image we are part of */
+	VipsImage *im;		/* Image we are part of */
 
 	/*< public >*/
 	int run;		/* Time we have been running */
@@ -172,7 +169,9 @@ typedef struct _VipsProgress {
 	(G_TYPE_INSTANCE_GET_CLASS( (obj), \
 	VIPS_TYPE_IMAGE, VipsImageClass ))
 
-typedef struct _VipsImage {
+/* Matching typedef in basic.h.
+ */
+struct _VipsImage {
 	VipsObject parent_instance;
 
 	/*< private >*/
@@ -284,7 +283,7 @@ typedef struct _VipsImage {
 
 	/* The VipsImage (if any) we should signal eval progress on.
 	 */
-	struct _VipsImage *progress_signal;
+	VipsImage *progress_signal;
 
 	/* Record the file length here. We use this to stop ourselves mapping
 	 * things beyond the end of the file in the case that the file has
@@ -312,7 +311,7 @@ typedef struct _VipsImage {
 	 */
 	gboolean delete_on_close;
 	char *delete_on_close_filename;
-} VipsImage;
+};
 
 typedef struct _VipsImageClass {
 	VipsObjectClass parent_class;
@@ -322,27 +321,27 @@ typedef struct _VipsImageClass {
 
 	/* Evaluation is starting.
 	 */
-	void (*preeval)( VipsImage *image, VipsProgress *progress );
+	void (*preeval)( VipsImage *image, VipsProgress *progress, void *data );
 
 	/* Evaluation progress.
 	 */
-	void (*eval)( VipsImage *image, VipsProgress *progress );
+	void (*eval)( VipsImage *image, VipsProgress *progress, void *data );
 
 	/* Evaluation is ending.
 	 */
-	void (*posteval)( VipsImage *image, VipsProgress *progress );
+	void (*posteval)( VipsImage *image, VipsProgress *progress, void *data );
 
 	/* An image has been written to. 
 	 * Used by eg. vips_image_new_mode("x.jpg", "w") to do the 
 	 * final write to jpeg.
 	 * Set *result to non-zero to indicate an error on write.
 	 */
-	void (*written)( VipsImage *image, int *result );
+	void (*written)( VipsImage *image, int *result, void *data );
 
 	/* An image has been modified in some way and all caches 
 	 * need dropping. 
 	 */
-	void (*invalidate)( VipsImage *image );
+	void (*invalidate)( VipsImage *image, void *data );
 
 	/* Minimise this pipeline. 
 	 *
@@ -352,7 +351,7 @@ typedef struct _VipsImageClass {
 	 *
 	 * See vips_tilecache().
 	 */
-	void (*minimise)( VipsImage *image );
+	void (*minimise)( VipsImage *image, void *data );
 
 } VipsImageClass;
 
@@ -426,7 +425,11 @@ void vips_image_invalidate_all( VipsImage *image );
 
 void vips_image_minimise_all( VipsImage *image );
 
+gboolean vips_image_is_sequential( VipsImage *image );
+
 void vips_image_set_progress( VipsImage *image, gboolean progress );
+gboolean vips_image_iskilled( VipsImage *image );
+void vips_image_set_kill( VipsImage *image, gboolean kill );
 
 char *vips_filename_get_filename( const char *vips_filename );
 char *vips_filename_get_options( const char *vips_filename );
@@ -446,13 +449,16 @@ VipsImage *vips_image_new_from_memory_copy( const void *data, size_t size,
 VipsImage *vips_image_new_from_buffer( const void *buf, size_t len, 
 	const char *option_string, ... )
 	__attribute__((sentinel));
+VipsImage *vips_image_new_from_source( VipsSource *source, 
+	const char *option_string, ... ) __attribute__((sentinel));
 VipsImage *vips_image_new_matrix( int width, int height );
 VipsImage *vips_image_new_matrixv( int width, int height, ... );
 VipsImage *vips_image_new_matrix_from_array( int width, int height, 
 	const double *array, int size );
 VipsImage *vips_image_matrix_from_array( int width, int height, 
 	const double *array, int size );
-VipsImage *vips_image_new_from_image( VipsImage *image, const double *c, int n );
+VipsImage *vips_image_new_from_image( VipsImage *image, 
+	const double *c, int n );
 VipsImage *vips_image_new_from_image1( VipsImage *image, double c );
 
 void vips_image_set_delete_on_close( VipsImage *image, 
@@ -465,6 +471,9 @@ int vips_image_write_to_file( VipsImage *image, const char *name, ... )
 	__attribute__((sentinel));
 int vips_image_write_to_buffer( VipsImage *in, 
 	const char *suffix, void **buf, size_t *size, ... )
+	__attribute__((sentinel));
+int vips_image_write_to_target( VipsImage *in, 
+	const char *suffix, VipsTarget *target, ... )
 	__attribute__((sentinel));
 void *vips_image_write_to_memory( VipsImage *in, size_t *size );
 
@@ -512,8 +521,10 @@ void vips_value_set_array_image( GValue *value, int n );
 /* Defined in reorder.c, but really a function on image.
  */
 int vips_reorder_prepare_many( VipsImage *image, 
-	struct _VipsRegion **regions, VipsRect *r );
+	VipsRegion **regions, VipsRect *r );
 void vips_reorder_margin_hint( VipsImage *image, int margin );
+
+void vips_image_free_buffer( VipsImage *image, void *buffer );
 
 #ifdef __cplusplus
 }

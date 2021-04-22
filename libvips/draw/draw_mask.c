@@ -353,7 +353,7 @@ vips_draw_maskv( VipsImage *image,
 	VipsArea *area_ink;
 	int result;
 
-	area_ink = (VipsArea *) vips_array_double_new( ink, n );
+	area_ink = VIPS_AREA( vips_array_double_new( ink, n ) );
 	result = vips_call_split( "draw_mask", ap, 
 		image, area_ink, mask, x, y );
 	vips_area_unref( area_ink );
@@ -362,7 +362,7 @@ vips_draw_maskv( VipsImage *image,
 }
 
 /**
- * vips_draw_mask:
+ * vips_draw_mask: (method)
  * @image: image to draw on
  * @ink: (array length=n): value to draw
  * @n: size of ink array
@@ -397,7 +397,7 @@ vips_draw_mask( VipsImage *image,
 }
 
 /**
- * vips_draw_mask1:
+ * vips_draw_mask1: (method)
  * @image: image to draw on
  * @ink: value to draw
  * @mask: mask of 0/255 values showing where to plot

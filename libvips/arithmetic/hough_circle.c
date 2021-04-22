@@ -2,6 +2,8 @@
  *
  * 7/3/14
  * 	- from hough_line.c
+ * 2/1/18
+ * 	- 20% speedup
  */
 
 /*
@@ -141,37 +143,25 @@ vips_hough_circle_init_accumulator( VipsHough *hough, VipsImage *accumulator )
 	return( 0 ); 
 }
 
-static inline void
-vips_hough_circle_vote_point( VipsImage *image, int x, int y, void *client )
-{
-	guint *q = (guint *) VIPS_IMAGE_ADDR( image, x, y );
-	int r = *((int *) client); 
-
-	g_assert( image->BandFmt == VIPS_FORMAT_UINT ); 
-	g_assert( x >= 0 ); 
-	g_assert( y >= 0 ); 
-	g_assert( x < image->Xsize ); 
-	g_assert( y < image->Ysize ); 
-	g_assert( r >= 0 ); 
-	g_assert( r < image->Bands ); 
-
-	q[r] += 1;
-}
-
 /* Vote endpoints, with clip.
  */
 static void 
 vips_hough_circle_vote_endpoints_clip( VipsImage *image,
-	int y, int x1, int x2, void *client )
+	int y, int x1, int x2, int quadrant, void *client )
 {
+	int r = *((int *) client); 
+	int b = image->Bands;
+
 	if( y >= 0 &&
 		y < image->Ysize ) {
+		guint *line = (guint *) VIPS_IMAGE_ADDR( image, 0, y ) + r;
+
 		if( x1 >=0 &&
 			x1 < image->Xsize )
-			vips_hough_circle_vote_point( image, x1, y, client );
+			line[x1 * b] += 1;
 		if( x2 >=0 &&
 			x2 < image->Xsize )
-			vips_hough_circle_vote_point( image, x2, y, client );
+			line[x2 * b] += 1;
 	}
 }
 
@@ -179,10 +169,14 @@ vips_hough_circle_vote_endpoints_clip( VipsImage *image,
  */
 static void 
 vips_hough_circle_vote_endpoints_noclip( VipsImage *image,
-	int y, int x1, int x2, void *client )
+	int y, int x1, int x2, int quadrant, void *client )
 {
-	vips_hough_circle_vote_point( image, x1, y, client );
-	vips_hough_circle_vote_point( image, x2, y, client );
+	int r = *((int *) client); 
+	guint *line = (guint *) VIPS_IMAGE_ADDR( image, 0, y ) + r;
+	int b = image->Bands;
+
+	line[x1 * b] += 1;
+	line[x2 * b] += 1;
 }
 
 /* Cast votes for all possible circles passing through x, y.
@@ -211,7 +205,7 @@ vips_hough_circle_vote( VipsHough *hough, VipsImage *accumulator, int x, int y )
 			cy - r >= 0 && 
 			cy + r < accumulator->Ysize )
 			draw_scanline = vips_hough_circle_vote_endpoints_noclip;
-			else
+		else
 			draw_scanline = vips_hough_circle_vote_endpoints_clip; 
 
 		vips__draw_circle_direct( accumulator, 
@@ -268,9 +262,9 @@ vips_hough_circle_init( VipsHoughCircle *hough_circle )
 }
 
 /**
- * vips_hough_circle:
+ * vips_hough_circle: (method)
  * @in: input image
- * @out: output image
+ * @out: (out): output image
  * @...: %NULL-terminated list of optional named arguments
  *
  * Optional arguments:
@@ -284,6 +278,9 @@ vips_hough_circle_init( VipsHoughCircle *hough_circle )
  * representing the detected circle radius. The operation scales the number of
  * votes by circle circumference so circles of differing size are given equal
  * weight. 
+ *
+ * The output pixel at (x, y, band) is the strength of the circle centred on
+ * (x, y) and with radius (band).
  *
  * Use @max_radius and @min_radius to set the range of radii to search for.
  *

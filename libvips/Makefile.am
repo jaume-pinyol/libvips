@@ -1,12 +1,16 @@
-OPTIONAL_COMPILE_DIR = 
+OPTIONAL_COMPILE_DIR =
 OPTIONAL_DIST_DIR =
-OPTIONAL_LIB = 
+OPTIONAL_LIB =
 
 if ENABLE_DEPRECATED
 OPTIONAL_COMPILE_DIR += deprecated
 OPTIONAL_LIB += deprecated/libdeprecated.la
 else
 OPTIONAL_DIST_DIR += deprecated
+endif
+
+if ENABLE_NSGIF
+OPTIONAL_LIB += foreign/libnsgif/libnsgif.la
 endif
 
 SUBDIRS = \
@@ -24,9 +28,7 @@ SUBDIRS = \
 	iofuncs \
 	morphology \
 	mosaicing \
-	create \
-	video \
-	.
+	create
 
 lib_LTLIBRARIES = libvips.la
 
@@ -52,7 +54,6 @@ libvips_la_LIBADD = \
 	morphology/libmorphology.la \
 	mosaicing/libmosaicing.la \
 	create/libcreate.la \
-	video/libvideo.la \
 	@VIPS_LIBS@
 
 libvips_la_LDFLAGS = \
@@ -89,7 +90,7 @@ AM_LDFLAGS = \
 LDADD = @INTROSPECTION_LIBS@ @VIPS_CFLAGS@ libvips.la @VIPS_LIBS@ 
 
 noinst_PROGRAMS = \
-	introspect
+	introspect$(EXEEXT)
 introspect_SOURCES = \
 	introspect.c
 
@@ -98,21 +99,22 @@ introspect_SOURCES = \
 introspection_sources = @vips_introspection_sources@
 
 # we make the vips8 API
-Vips-8.0.gir: introspect
+Vips-8.0.gir: introspect$(EXEEXT)
 Vips_8_0_gir_INCLUDES = GObject-2.0
 Vips_8_0_gir_CFLAGS = $(INCLUDES) -I${top_srcdir}/libvips/include
 Vips_8_0_gir_LIBS = libvips.la
 Vips_8_0_gir_FILES = $(introspection_sources)
 INTROSPECTION_GIRS += Vips-8.0.gir
 
-# don't use 
-#   --warn-all --verbose 
+# don't use
+#   --warn-all --verbose
 # too annoying
 Vips_8_0_gir_SCANNERFLAGS = \
 	--program=./introspect$(EXEEXT) \
 	--identifier-prefix=Vips \
 	--identifier-prefix=vips \
-	--symbol-prefix=vips 
+	--symbol-prefix=vips \
+	--c-include=vips/vips.h
 
 girdir = $(datadir)/gir-1.0
 gir_DATA = $(INTROSPECTION_GIRS)
@@ -121,4 +123,5 @@ typelibdir = $(libdir)/girepository-1.0
 typelib_DATA = $(INTROSPECTION_GIRS:.gir=.typelib)
 
 CLEANFILES += $(gir_DATA) $(typelib_DATA)
+
 endif

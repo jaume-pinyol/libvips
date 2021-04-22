@@ -80,7 +80,7 @@ vips_arrayjoin_gen( VipsRegion *or, void *seq,
 	VipsRegion **ir = (VipsRegion **) seq;
 	VipsArrayjoin *join = (VipsArrayjoin *) b;
 	VipsRect *r = &or->valid;
-	int n = ((VipsArea *) join->in)->n;
+	int n = VIPS_AREA( join->in )->n;
 
 	int i;
 
@@ -159,15 +159,15 @@ vips_arrayjoin_build( VipsObject *object )
 	}
 
 	if( !vips_object_argument_isset( object, "hspacing" ) ) 
-		g_object_set( object, "hspacing", hspacing, NULL );
+		join->hspacing = hspacing;
 	if( !vips_object_argument_isset( object, "vspacing" ) ) 
-		g_object_set( object, "vspacing", vspacing, NULL );
+		join->vspacing = vspacing;
 
 	hspacing = join->hspacing;
 	vspacing = join->vspacing;
 
 	if( !vips_object_argument_isset( object, "across" ) ) 
-		g_object_set( object, "across", n, NULL );
+		join->across = n;
 
 	/* How many images down the grid?
 	 */
@@ -384,7 +384,7 @@ vips_arrayjoinv( VipsImage **in, VipsImage **out, int n, va_list ap )
 /**
  * vips_arrayjoin:
  * @in: (array length=n) (transfer none): array of input images
- * @out: output image
+ * @out: (out): output image
  * @n: number of input images
  * @...: %NULL-terminated list of optional named arguments
  *
@@ -424,7 +424,10 @@ vips_arrayjoinv( VipsImage **in, VipsImage **out, int n, va_list ap )
  * Smallest common format in 
  * <link linkend="libvips-arithmetic">arithmetic</link>).
  *
- * See also: vips_join(), vips_insert().
+ * vips_colourspace() can be useful for moving the images to a common
+ * colourspace for compositing.
+ *
+ * See also: vips_join(), vips_insert(), vips_colourspace().
  *
  * Returns: 0 on success, -1 on error
  */

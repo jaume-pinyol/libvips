@@ -79,9 +79,9 @@ $ vips im_max abs.v
  */
 
 /*
- */
 #define DEBUG
 #define VIPS_DEBUG
+ */
 
 #ifdef HAVE_CONFIG_H
 #include <config.h>
@@ -1312,9 +1312,9 @@ vips_conva_init( VipsConva *conva )
 }
 
 /**
- * vips_conva:
+ * vips_conva: (method)
  * @in: input image
- * @out: output image
+ * @out: (out): output image
  * @mask: convolution mask
  * @...: %NULL-terminated list of optional named arguments
  *

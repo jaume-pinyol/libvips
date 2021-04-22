@@ -46,14 +46,67 @@
 #include <string.h>
 
 #include <vips/vips.h>
+#include <vips/vips7compat.h>
 #include <vips/internal.h>
 #include <vips/thread.h>
 
 #include "../foreign/pforeign.h"
 
+#ifdef HAVE_TIFF
+static gboolean
+im_istifftiled( const char *filename )
+{
+	VipsSource *source;
+	gboolean result;
+
+	if( !(source = vips_source_new_from_file( filename )) )
+		return( FALSE );
+	result = vips__istiff_source( source );
+	VIPS_UNREF( source );
+
+	return( result );
+}
+
+static int
+im_tiff_read_header( const char *filename, VipsImage *out, 
+	int page, int n, gboolean autorotate )
+{
+	VipsSource *source;
+
+	if( !(source = vips_source_new_from_file( filename )) )
+		return( -1 );
+	if( vips__tiff_read_header_source( source, 
+		out, page, n, autorotate, -1 ) ) {
+		VIPS_UNREF( source );
+		return( -1 );
+	}
+	VIPS_UNREF( source );
+
+	return( 0 );
+}
+
+static int
+im_tiff_read( const char *filename, VipsImage *out, 
+	int page, int n, gboolean autorotate )
+{
+	VipsSource *source;
+
+	if( !(source = vips_source_new_from_file( filename )) )
+		return( -1 );
+	if( vips__tiff_read_source( source, out, page, n, autorotate, -1 ) ) {
+		VIPS_UNREF( source );
+		return( -1 );
+	}
+	VIPS_UNREF( source );
+
+	return( 0 );
+}
+#endif /*HAVE_TIFF*/
+
 static int
 tiff2vips( const char *name, IMAGE *out, gboolean header_only )
 {
+#ifdef HAVE_TIFF
 	char filename[FILENAME_MAX];
 	char mode[FILENAME_MAX];
 	char *p, *q;
@@ -84,21 +137,20 @@ tiff2vips( const char *name, IMAGE *out, gboolean header_only )
 	 * malloc if all we are doing is looking at fields.
 	 */
 
-#ifdef HAVE_TIFF
 	if( !header_only &&
 		!seq &&
-		!vips__istifftiled( filename ) &&
+		!im_istifftiled( filename ) &&
 		out->dtype == VIPS_IMAGE_PARTIAL ) {
 		if( vips__image_wio_output( out ) ) 
 			return( -1 );
 	}
 
 	if( header_only ) {
-		if( vips__tiff_read_header( filename, out, page, 1, FALSE ) )
+		if( im_tiff_read_header( filename, out, page, 1, FALSE ) )
 			return( -1 );
 	}
 	else {
-		if( vips__tiff_read( filename, out, page, 1, FALSE ) )
+		if( im_tiff_read( filename, out, page, 1, FALSE ) )
 			return( -1 );
 	}
 #else

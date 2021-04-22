@@ -2,6 +2,8 @@
  *
  * 22/5/14
  * 	- from vips_merge()
+ * 13/6/17
+ * 	- tag as SEQUENTIAL
  */
 
 /*
@@ -31,11 +33,6 @@
 
  */
 
-/* This is a simple wrapper over the old vips7 functions. At some point we
- * should rewrite this as a pure vips8 class and redo the vips7 functions as
- * wrappers over this.
- */
-
 #ifdef HAVE_CONFIG_H
 #include <config.h>
 #endif /*HAVE_CONFIG_H*/
@@ -44,6 +41,7 @@
 #include <stdio.h>
 
 #include <vips/vips.h>
+#include "pmosaicing.h"
 
 typedef struct {
 	VipsOperation parent_instance;
@@ -74,13 +72,13 @@ vips_merge_build( VipsObject *object )
 
 	switch( merge->direction ) { 
 	case VIPS_DIRECTION_HORIZONTAL:
-		if( im_lrmerge( merge->ref, merge->sec, merge->out, 
+		if( vips__lrmerge( merge->ref, merge->sec, merge->out, 
 			merge->dx, merge->dy, merge->mblend ) )
 			return( -1 ); 
 		break;
 
 	case VIPS_DIRECTION_VERTICAL:
-		if( im_tbmerge( merge->ref, merge->sec, merge->out, 
+		if( vips__tbmerge( merge->ref, merge->sec, merge->out, 
 			merge->dx, merge->dy, merge->mblend ) )
 			return( -1 ); 
 		break;
@@ -88,6 +86,17 @@ vips_merge_build( VipsObject *object )
 	default:
 		g_assert_not_reached();
 	}
+
+	vips__add_mosaic_name( merge->out );
+	if( vips_image_history_printf( merge->out, 
+		"#%s <%s> <%s> <%s> <%d> <%d> <%d>", 
+		merge->direction == VIPS_DIRECTION_HORIZONTAL ?
+			"LRJOIN" : "TBJOIN",
+		vips__get_mosaic_name( merge->ref ), 
+		vips__get_mosaic_name( merge->sec ), 
+		vips__get_mosaic_name( merge->out ), 
+		-merge->dx, -merge->dy, merge->mblend ) ) 
+		return( -1 );
 
 	return( 0 );
 }
@@ -97,6 +106,7 @@ vips_merge_class_init( VipsMergeClass *class )
 {
 	GObjectClass *gobject_class = G_OBJECT_CLASS( class );
 	VipsObjectClass *object_class = (VipsObjectClass *) class;
+	VipsOperationClass *operation_class = VIPS_OPERATION_CLASS( class );
 
 	gobject_class->set_property = vips_object_set_property;
 	gobject_class->get_property = vips_object_get_property;
@@ -104,6 +114,8 @@ vips_merge_class_init( VipsMergeClass *class )
 	object_class->nickname = "merge";
 	object_class->description = _( "merge two images" );
 	object_class->build = vips_merge_build;
+
+	operation_class->flags = VIPS_OPERATION_SEQUENTIAL;
 
 	VIPS_ARG_IMAGE( class, "ref", 1, 
 		_( "Reference" ), 
@@ -125,7 +137,7 @@ vips_merge_class_init( VipsMergeClass *class )
 
 	VIPS_ARG_ENUM( class, "direction", 4, 
 		_( "Direction" ), 
-		_( "Horizontal or vertcial merge" ),
+		_( "Horizontal or vertical merge" ),
 		VIPS_ARGUMENT_REQUIRED_INPUT, 
 		G_STRUCT_OFFSET( VipsMerge, direction ), 
 		VIPS_TYPE_DIRECTION, VIPS_DIRECTION_HORIZONTAL ); 
@@ -163,7 +175,7 @@ vips_merge_init( VipsMerge *merge )
  * vips_merge:
  * @ref: reference image
  * @sec: secondary image
- * @out: output image
+ * @out: (out): output image
  * @direction: horizontal or vertical merge
  * @dx: displacement of ref from sec
  * @dy: displacement of ref from sec

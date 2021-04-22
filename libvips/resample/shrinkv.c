@@ -45,6 +45,8 @@
  * 	- rename yshrink -> vshrink for greater consistency 
  * 7/3/17
  * 	- add a seq line cache
+ * 6/8/19
+ * 	- use a double sum buffer for int32 types
  */
 
 /*
@@ -122,6 +124,8 @@ vips_shrinkv_stop( void *vseq, void *a, void *b )
 	VipsShrinkvSequence *seq = (VipsShrinkvSequence *) vseq;
 
 	VIPS_FREEF( g_object_unref, seq->ir );
+	VIPS_FREE( seq->sum );
+	VIPS_FREE( seq );
 
 	return( 0 );
 }
@@ -135,14 +139,14 @@ vips_shrinkv_start( VipsImage *out, void *a, void *b )
 	VipsShrinkv *shrink = (VipsShrinkv *) b;
 	VipsShrinkvSequence *seq;
 
-	if( !(seq = VIPS_NEW( out, VipsShrinkvSequence )) )
+	if( !(seq = VIPS_NEW( NULL, VipsShrinkvSequence )) )
 		return( NULL );
 
 	seq->ir = vips_region_new( in );
 
 	/* Big enough for the largest intermediate .. a whole scanline. 
 	 */
-	seq->sum = VIPS_ARRAY( out, shrink->sizeof_line_buffer, VipsPel );
+	seq->sum = VIPS_ARRAY( NULL, shrink->sizeof_line_buffer, VipsPel );
 
 	return( (void *) seq );
 }
@@ -180,9 +184,9 @@ vips_shrinkv_add_line( VipsShrinkv *shrink, VipsShrinkvSequence *seq,
 	case VIPS_FORMAT_SHORT: 	
 		ADD( int, short ); break; 
 	case VIPS_FORMAT_UINT: 	
-		ADD( int, unsigned int ); break; 
+		ADD( double, unsigned int ); break; 
 	case VIPS_FORMAT_INT: 	
-		ADD( int, int );  break; 
+		ADD( double, int );  break; 
 	case VIPS_FORMAT_FLOAT: 	
 		ADD( double, float ); break; 
 	case VIPS_FORMAT_DOUBLE:	
@@ -199,8 +203,8 @@ vips_shrinkv_add_line( VipsShrinkv *shrink, VipsShrinkvSequence *seq,
 
 /* Integer average. 
  */
-#define IAVG( TYPE ) { \
-	int * restrict sum = (int *) seq->sum; \
+#define IAVG( ACC_TYPE, TYPE ) { \
+	ACC_TYPE * restrict sum = (ACC_TYPE *) seq->sum; \
 	TYPE * restrict q = (TYPE *) out; \
 	\
 	for( x = 0; x < sz; x++ ) \
@@ -233,18 +237,18 @@ vips_shrinkv_write_line( VipsShrinkv *shrink, VipsShrinkvSequence *seq,
 
 	VipsPel *out = VIPS_REGION_ADDR( or, left, top ); 
 	switch( resample->in->BandFmt ) {
-	case VIPS_FORMAT_UCHAR: 	
-		IAVG( unsigned char ); break;
-	case VIPS_FORMAT_CHAR: 	
-		IAVG( char ); break; 
-	case VIPS_FORMAT_USHORT: 
-		IAVG( unsigned short ); break;
+	case VIPS_FORMAT_UCHAR:
+		IAVG( int, unsigned char ); break;
+	case VIPS_FORMAT_CHAR:
+		IAVG( int, char ); break; 
+	case VIPS_FORMAT_USHORT:
+		IAVG( int, unsigned short ); break;
 	case VIPS_FORMAT_SHORT: 	
-		IAVG( short ); break; 
+		IAVG( int, short ); break; 
 	case VIPS_FORMAT_UINT: 	
-		IAVG( unsigned int ); break; 
+		IAVG( double, unsigned int ); break; 
 	case VIPS_FORMAT_INT: 	
-		IAVG( int );  break; 
+		IAVG( double, int );  break; 
 	case VIPS_FORMAT_FLOAT: 	
 		FAVG( float ); break; 
 	case VIPS_FORMAT_DOUBLE:	
@@ -343,18 +347,12 @@ vips_shrinkv_build( VipsObject *object )
 	if( shrink->vshrink == 1 )
 		return( vips_image_write( in, resample->out ) );
 
-	/* Unpack for processing.
-	 */
-	if( vips_image_decode( in, &t[0] ) )
-		return( -1 );
-	in = t[0];
-
-	/* We need new pixels along the bottom so that we don't have small chunks
-	 * to average along the bottom edge.
+	/* Make the height a multiple of the shrink factor so we don't need to
+	 * average half pixels.
 	 */
 	if( vips_embed( in, &t[1], 
 		0, 0, 
-		in->Xsize, in->Ysize + shrink->vshrink, 
+		in->Xsize, VIPS_ROUND_UP( in->Ysize, shrink->vshrink ), 
 		"extend", VIPS_EXTEND_COPY,
 		NULL ) )
 		return( -1 );
@@ -412,7 +410,7 @@ vips_shrinkv_build( VipsObject *object )
 	 * always have the previous XX lines of the shrunk image, and we won't
 	 * fetch out of order. 
 	 */
-	if( vips_image_get_typeof( in, VIPS_META_SEQUENTIAL ) ) { 
+	if( vips_image_is_sequential( in ) ) { 
 		g_info( "shrinkv sequential line cache" ); 
 
 		if( vips_sequential( in, &t[3], 
@@ -470,9 +468,9 @@ vips_shrinkv_init( VipsShrinkv *shrink )
 }
 
 /**
- * vips_shrinkv:
+ * vips_shrinkv: (method)
  * @in: input image
- * @out: output image
+ * @out: (out): output image
  * @vshrink: vertical shrink
  * @...: %NULL-terminated list of optional named arguments
  *

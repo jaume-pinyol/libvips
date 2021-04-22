@@ -14,6 +14,8 @@
  * 	- gtkdoc comments
  * 24/6/10
  * 	- fmt to error_exit() may be NULL
+ * 12/9/19 [dineshkannaa]
+ * 	- add vips_error_buffer_copy()
  */
 
 /*
@@ -63,13 +65,13 @@
 #include <vips/thread.h>
 #include <vips/debug.h>
 
-#ifdef OS_WIN32
+#ifdef G_OS_WIN32
 #include <windows.h>
 #include <lmerr.h>
-#endif /*OS_WIN32*/
+#endif /*G_OS_WIN32*/
 
 /**
- * SECTION: error
+ * SECTION: errors
  * @short_description: error messages and error handling
  * @stability: Stable
  * @include: vips/vips.h
@@ -184,6 +186,26 @@ vips_error_buffer( void )
 	return( msg );
 }
 
+/**
+ * vips_error_buffer_copy: 
+ *
+ * Return a copy of the vips error buffer, and clear it. 
+ *
+ * Returns: a copy of the libvips error buffer
+ */
+char *
+vips_error_buffer_copy( void )
+{
+	char *msg;
+
+	g_mutex_lock( vips__global_lock );
+	msg = g_strdup( vips_buf_all( &vips_error_buf ) );
+	vips_buf_rewind( &vips_error_buf );
+	g_mutex_unlock( vips__global_lock );
+
+	return( msg );
+}
+
 /* Some systems do not have va_copy() ... this might work (it does on MSVC),
  * apparently.
  *
@@ -272,7 +294,7 @@ vips_verror_system( int err, const char *domain, const char *fmt, va_list ap )
 {
 	vips_verror( domain, fmt, ap );
 
-#ifdef OS_WIN32
+#ifdef G_OS_WIN32
 {
 	char *buf;
 
@@ -288,7 +310,7 @@ vips_verror_system( int err, const char *domain, const char *fmt, va_list ap )
 		LocalFree( buf );
 	}
 }
-#else /*OS_WIN32*/
+#else /*!G_OS_WIN32*/
 {
 	char *buf;
 
@@ -296,7 +318,7 @@ vips_verror_system( int err, const char *domain, const char *fmt, va_list ap )
 	vips_error( _( "unix error" ), "%s", buf );
 	g_free( buf );
 }
-#endif /*OS_WIN32*/
+#endif /*G_OS_WIN32*/
 }
 
 /**
@@ -324,7 +346,7 @@ vips_error_system( int err, const char *domain, const char *fmt, ... )
 
 /**
  * vips_error_g:
- * @error: glib error pointer
+ * @error: (out): glib error pointer
  *
  * This function sets the glib error pointer from the vips error buffer and
  * clears it. It's handy for returning errors to glib functions from vips.
@@ -1188,7 +1210,7 @@ vips_check_hist( const char *domain, VipsImage *im )
  * vips_check_matrix: 
  * @domain: the originating domain for the error message
  * @im: image to check 
- * @out: put image as in-memory doubles here
+ * @out: (out): put image as in-memory doubles here
  *
  * Matrix images must have width and height less than 100000 and have 1 band.
  *

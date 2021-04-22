@@ -102,7 +102,7 @@
  * VipsImage *im = ...;
  * VipsImage *t1; 
  *
- * if (vips_invert (im, &amp;t1, NULL)) 
+ * if (vips_invert (im, &t1, NULL)) 
  *   error ..
  * ]|
  *
@@ -122,13 +122,13 @@
  * VipsImage *im = ...;
  * VipsImage *t1, *t2;
  *
- * if (vips_invert (im, &amp;t1, NULL)) {
+ * if (vips_invert (im, &t1, NULL)) {
  *   g_object_unref (im);
  *   return -1;
  * }
  * g_object_unref (im);
  *
- * if (vips_flip (t1, &amp;t2, VIPS_DIRECTION_HORIZONTAL, NULL)) {
+ * if (vips_flip (t1, &t2, VIPS_DIRECTION_HORIZONTAL, NULL)) {
  *   g_object_unref (t1);
  *   return -1;
  * }
@@ -143,8 +143,8 @@
  * VipsImage *im = ...;
  * VipsImage *t = (VipsImage **) vips_object_local_array (parent, 2);
  *
- * if (vips_invert (im, &amp;t[0], NULL) ||
- *   vips_flip (t[0], &amp;t[1], VIPS_DIRECTION_HORIZONTAL, NULL))
+ * if (vips_invert (im, &t[0], NULL) ||
+ *   vips_flip (t[0], &t[1], VIPS_DIRECTION_HORIZONTAL, NULL))
  *   return -1;
  * ]|
  *
@@ -407,7 +407,7 @@ vips_operation_usage( VipsOperationClass *class, VipsBuf *buf )
 	vips_argument_class_map( object_class,
 		(VipsArgumentClassMapFn) vips_operation_class_usage_arg, 
 			buf, &usage );
-	vips_buf_appends( buf, "\n" );
+	vips_buf_appends( buf, " [--option-name option-value ...]\n" );
 
 	/* Show required types.
 	 */
@@ -489,6 +489,8 @@ vips_operation_dump( VipsObject *object, VipsBuf *buf )
 	VipsOperation *operation = VIPS_OPERATION( object );
 	VipsObjectClass *object_class = VIPS_OBJECT_GET_CLASS( object );
 
+	if( operation->found_hash )
+		printf( "hash = %x\n", operation->hash ); 
 	printf( "%s args:\n", object_class->nickname );
 	vips_argument_map( VIPS_OBJECT( operation ),
 		vips_operation_call_argument, NULL, NULL );
@@ -609,7 +611,7 @@ vips_operation_get_flags( VipsOperation *operation )
 void
 vips_operation_class_print_usage( VipsOperationClass *operation_class )
 {
-	char str[2048];
+	char str[4096];
 	VipsBuf buf = VIPS_BUF_STATIC( str );
 
 	operation_class->usage( operation_class, &buf );
@@ -628,7 +630,7 @@ vips_operation_invalidate( VipsOperation *operation )
 }
 
 /**
- * vips_operation_new:
+ * vips_operation_new: (constructor)
  * @name: nickname of operation to create
  *
  * Return a new #VipsOperation with the specified nickname. Useful for
@@ -951,7 +953,7 @@ vips_call_by_name( const char *operation_name,
  * VipsImage *in = ...
  * VipsImage *out;
  *
- * if( vips_call( "embed", in, &amp;out, 10, 10, 100, 100,
+ * if( vips_call( "embed", in, &out, 10, 10, 100, 100,
  * 	"extend", VIPS_EXTEND_COPY,
  * 	NULL ) )
  * 	... error
@@ -1243,7 +1245,8 @@ typedef struct _VipsCall {
 static const char *
 vips_call_get_arg( VipsCall *call, int i )
 {
-	if( i < 0 || i >= call->argc ) {
+	if( i < 0 || 
+		i >= call->argc ) {
 		vips_error( VIPS_OBJECT_GET_CLASS( call->operation )->nickname, 
 			"%s", _( "too few arguments" ) );
 		return( NULL );
@@ -1362,7 +1365,7 @@ vips_call_argv( VipsOperation *operation, int argc, char **argv )
 
 	/* Any unused arguments? We must fail. Consider eg. "vips bandjoin a b
 	 * c". This would overwrite b with a and ignore c, potentially
-	 * disasterous.
+	 * disastrous.
 	 */
 	if( argc > call.i ) {
 		vips_error( VIPS_OBJECT_GET_CLASS( operation )->nickname, 

@@ -54,6 +54,7 @@
 #ifdef HAVE_CONFIG_H
 #include <config.h>
 #endif /*HAVE_CONFIG_H*/
+
 #include <vips/intl.h>
 
 #include <stdlib.h>
@@ -63,7 +64,7 @@
 #include <vips/internal.h>
 #include <vips/thread.h>
 
-/* Cleared by the command-line --vips-novector switch and the IM_NOVECTOR env
+/* Cleared by the command-line --vips-novector switch and the VIPS_NOVECTOR env
  * var.
  */
 gboolean vips__vector_enabled = TRUE;
@@ -71,11 +72,13 @@ gboolean vips__vector_enabled = TRUE;
 void
 vips_vector_error( VipsVector *vector )
 {
+#ifdef HAVE_ORC
 #ifdef HAVE_ORC_PROGRAM_GET_ERROR
 	if( vector->program )
 		g_warning( "orc error: %s", 
 			orc_program_get_error( vector->program ) ); 
 #endif /*HAVE_ORC_PROGRAM_GET_ERROR*/
+#endif /*HAVE_ORC*/
 }
 
 void 
@@ -96,12 +99,16 @@ vips_vector_init( void )
 	orc_debug_set_level( 99 );
 #endif /*DEBUG_ORC*/
 
-	/* Look for the environment variable IM_NOVECTOR and use that to turn
+	/* Look for the environment variable VIPS_NOVECTOR and use that to turn
 	 * off as well.
 	 */
-	if( g_getenv( "VIPS_NOVECTOR" ) || 
-		g_getenv( "IM_NOVECTOR" ) ) 
+	if( g_getenv( "VIPS_NOVECTOR" )
+#if ENABLE_DEPRECATED
+		|| g_getenv( "IM_NOVECTOR" )
+#endif
+	)
 		vips__vector_enabled = FALSE;
+
 #endif /*HAVE_ORC*/
 }
 

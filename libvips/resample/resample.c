@@ -68,7 +68,7 @@
  *
  * vips_reduce() is like vips_affine(), but it can only shrink images, it can't
  * enlarge, rotate, or skew. It's very fast and uses an adaptive kernel for
- * interpolation. Again, it will give poor results for large size reductions.
+ * interpolation.
  *
  * vips_shrink() is a fast block shrinker. It can quickly reduce images by
  * large integer factors. It will give poor results for small size reductions:
@@ -157,6 +157,7 @@ vips_resample_operation_init( void )
 	extern GType vips_thumbnail_file_get_type( void ); 
 	extern GType vips_thumbnail_buffer_get_type( void ); 
 	extern GType vips_thumbnail_image_get_type( void ); 
+	extern GType vips_thumbnail_source_get_type( void ); 
 	extern GType vips_mapim_get_type( void ); 
 	extern GType vips_shrink_get_type( void ); 
 	extern GType vips_shrinkh_get_type( void ); 
@@ -167,11 +168,13 @@ vips_resample_operation_init( void )
 	extern GType vips_quadratic_get_type( void ); 
 	extern GType vips_affine_get_type( void ); 
 	extern GType vips_similarity_get_type( void ); 
+	extern GType vips_rotate_get_type( void ); 
 	extern GType vips_resize_get_type( void ); 
 
 	vips_thumbnail_file_get_type(); 
 	vips_thumbnail_buffer_get_type(); 
 	vips_thumbnail_image_get_type(); 
+	vips_thumbnail_source_get_type(); 
 	vips_mapim_get_type(); 
 	vips_shrink_get_type(); 
 	vips_shrinkh_get_type(); 
@@ -182,6 +185,7 @@ vips_resample_operation_init( void )
 	vips_quadratic_get_type(); 
 	vips_affine_get_type(); 
 	vips_similarity_get_type(); 
+	vips_rotate_get_type(); 
 	vips_resize_get_type(); 
 }
 

@@ -63,13 +63,13 @@
  * VipsBuf buf = VIPS_BUF_STATIC (txt);
  * int i;
  *
- * vips_buf_appends (&amp;buf, "Numbers are: ");
+ * vips_buf_appends (&buf, "Numbers are: ");
  * for (i = 0; i &lt; array_length; i++) {
  *   if (i &gt; 0)
- *     vips_buf_appends (&amp;buf, ", ");
- *   vips_buf_appendg (&amp;buf, array[i]);
+ *     vips_buf_appends (&buf, ", ");
+ *   vips_buf_appendg (&buf, array[i]);
  * }
- * printf ("%s", vips_buf_all (&amp;buf));
+ * printf ("%s", vips_buf_all (&buf));
  * ]|
  */
 
@@ -171,7 +171,7 @@ vips_buf_set_static( VipsBuf *buf, char *base, int mx )
  * char txt[256];
  * VipsBuf buf;
  * 
- * vips_buf_init_static (&amp;buf, txt, 256);
+ * vips_buf_init_static (&buf, txt, 256);
  * ]|
  * 
  * Static buffers don't need to be freed when they go out of scope, but their
@@ -227,7 +227,7 @@ vips_buf_set_dynamic( VipsBuf *buf, int mx )
  * |[
  * VipsBuf buf;
  * 
- * vips_buf_init_synamic (&amp;buf, 256);
+ * vips_buf_init_synamic (&buf, 256);
  * ]|
  *
  * Dynamic buffers must be freed with vips_buf_destroy(), but their size can
@@ -275,10 +275,11 @@ vips_buf_appendns( VipsBuf *buf, const char *str, int sz )
 	 */
 	avail = buf->mx - buf->i - 4;
 
-	/* Amount we actually copy.
-	 */
 	cpy = VIPS_MIN( n, avail );
 
+	/* Can't use vips_strncpy() here, we don't want to drop the end of the
+	 * string.
+	 */
 	strncpy( buf->base + buf->i, str, cpy );
 	buf->i += cpy;
 
@@ -400,7 +401,7 @@ vips_buf_removec( VipsBuf *buf, char ch )
  * @ap: arguments to format string
  *
  * Append to @buf, args as <function>vprintf()</function>.
- * 
+ *
  * Returns: %FALSE on overflow, %TRUE otherwise.
  */
 gboolean
@@ -548,7 +549,7 @@ vips_buf_appendgv( VipsBuf *buf, GValue *value )
 
 	case G_TYPE_UINT64:
 		result = vips_buf_appendf( buf, 
-			"%zd", g_value_get_uint64( value ) );
+			"%" G_GINT64_FORMAT, g_value_get_uint64( value ) );
 		handled = TRUE;
 		break;
 

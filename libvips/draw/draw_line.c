@@ -322,7 +322,7 @@ vips_draw_linev( VipsImage *image,
 	VipsArea *area_ink;
 	int result;
 
-	area_ink = (VipsArea *) vips_array_double_new( ink, n );
+	area_ink = VIPS_AREA( vips_array_double_new( ink, n ) );
 	result = vips_call_split( "draw_line", ap, 
 		image, area_ink, x1, y1, x2, y2 );
 	vips_area_unref( area_ink );
@@ -331,7 +331,7 @@ vips_draw_linev( VipsImage *image,
 }
 
 /**
- * vips_draw_line:
+ * vips_draw_line: (method)
  * @image: image to draw on
  * @ink: (array length=n): value to draw
  * @n: length of ink array
@@ -364,7 +364,7 @@ vips_draw_line( VipsImage *image,
 }
 
 /**
- * vips_draw_line1:
+ * vips_draw_line1: (method)
  * @image: image to draw on
  * @ink: value to draw
  * @x1: start of draw_line

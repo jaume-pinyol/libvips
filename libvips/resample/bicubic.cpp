@@ -54,10 +54,6 @@
 
 #include "templates.h"
 
-#ifdef WITH_DMALLOC
-#include <dmalloc.h>
-#endif /*WITH_DMALLOC*/
-
 #define VIPS_TYPE_INTERPOLATE_BICUBIC \
 	(vips_interpolate_bicubic_get_type())
 #define VIPS_INTERPOLATE_BICUBIC( obj ) \
@@ -533,16 +529,16 @@ vips_interpolate_bicubic_interpolate( VipsInterpolate *interpolate,
 	const int bands = in->im->Bands;
 	const int lskip = VIPS_REGION_LSKIP( in );
 
-	g_assert( ix - 1 >= in->valid.left );
-	g_assert( iy - 1 >= in->valid.top );
-	g_assert( ix + 2 < VIPS_RECT_RIGHT( &in->valid ) );
-	g_assert( iy + 2 < VIPS_RECT_BOTTOM( &in->valid ) );
-
 	/* Confirm that absolute_x and absolute_y are >= 1, because of
 	 * window_offset.
 	 */
 	g_assert( x >= 1.0 );
 	g_assert( y >= 1.0 );
+
+	g_assert( ix - 1 >= in->valid.left );
+	g_assert( iy - 1 >= in->valid.top );
+	g_assert( ix + 2 < VIPS_RECT_RIGHT( &in->valid ) );
+	g_assert( iy + 2 < VIPS_RECT_BOTTOM( &in->valid ) );
 
 #ifdef DEBUG
 	printf( "vips_interpolate_bicubic_interpolate: %g %g\n", x, y );
@@ -580,15 +576,15 @@ vips_interpolate_bicubic_interpolate( VipsInterpolate *interpolate,
 		break;
 
 	case VIPS_FORMAT_USHORT:
-		bicubic_unsigned_int_tab<unsigned short, USHRT_MAX>(
+		bicubic_unsigned_int32_tab<unsigned short, USHRT_MAX>(
 			out, p, bands, lskip,
-			cxi, cyi );
+			cxf, cyf );
 		break;
 
 	case VIPS_FORMAT_SHORT:
-		bicubic_signed_int_tab<signed short, SHRT_MIN, SHRT_MAX>(
+		bicubic_signed_int32_tab<signed short, SHRT_MIN, SHRT_MAX>(
 			out, p, bands, lskip,
-			cxi, cyi );
+			cxf, cyf );
 		break;
 
 	case VIPS_FORMAT_UINT:
@@ -659,7 +655,7 @@ vips_interpolate_bicubic_init( VipsInterpolateBicubic *bicubic )
 {
 #ifdef DEBUG
 	printf( "vips_interpolate_bicubic_init: " );
-	vips_object_print( VIPS_OBJECT( bicubic ) );
+	vips_object_print_dump( VIPS_OBJECT( bicubic ) );
 #endif /*DEBUG*/
 
 }

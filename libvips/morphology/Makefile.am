@@ -1,11 +1,11 @@
 noinst_LTLIBRARIES = libmorphology.la
 
 libmorphology_la_SOURCES = \
+	nearest.c \
 	morphology.c \
 	pmorphology.h \
 	countlines.c \
 	rank.c \
-	hitmiss.c \
 	morph.c \
 	labelregions.c 
 

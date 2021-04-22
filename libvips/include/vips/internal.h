@@ -39,6 +39,14 @@
 extern "C" {
 #endif /*__cplusplus*/
 
+/* << on an int is undefined in C if the int is negative. Imagine a machine
+ * that uses 1s complement, for example.
+ *
+ * Fuzzers find and warn about this, so we must use this macro instead. Cast
+ * to uint, shift, and cast back.
+ */
+#define VIPS_LSHIFT_INT( I, N ) ((int) ((unsigned int) (I) << (N)))
+
 /* What we store in the Meta hash table. We can't just use GHashTable's 
  * key/value pairs, since we need to iterate over meta in Meta_traverse order.
  *
@@ -51,6 +59,9 @@ typedef struct _VipsMeta {
 	char *name;			/* strdup() of field name */
 	GValue value;			/* copy of value */
 } VipsMeta;
+
+int vips__exif_parse( VipsImage *image );
+int vips__exif_update( VipsImage *image );
 
 void vips_check_init( void );
 
@@ -103,9 +114,9 @@ void vips__threadpool_init( void );
 
 void vips__cache_init( void );
 
-void vips__print_renders( void );
-
-void vips__type_leak( void );
+int vips__print_renders( void );
+int vips__type_leak( void );
+int vips__object_leak( void );
 
 typedef int (*im__fftproc_fn)( VipsImage *, VipsImage *, VipsImage * );
 int im__fftproc( VipsImage *dummy, 
@@ -122,9 +133,7 @@ void vips__link_break_all( VipsImage *im );
 void *vips__link_map( VipsImage *image, gboolean upstream, 
 	VipsSListMap2Fn fn, void *a, void *b );
 
-char *vips__b64_encode( const unsigned char *data, size_t data_length );
-unsigned char *vips__b64_decode( const char *buffer, size_t *data_length );
-
+gboolean vips__mmap_supported( int fd );
 void *vips__mmap( int fd, int writeable, size_t length, gint64 offset );
 int vips__munmap( const void *start, size_t length );
 int vips_mapfile( VipsImage * );
@@ -143,6 +152,7 @@ int vips__write_extension_block( VipsImage *im, void *buf, int size );
 int vips__writehist( VipsImage *image );
 int vips__read_header_bytes( VipsImage *im, unsigned char *from );
 int vips__write_header_bytes( VipsImage *im, unsigned char *to );
+int vips__image_meta_copy( VipsImage *dst, const VipsImage *src );
 
 extern GMutex *vips__global_lock;
 
@@ -150,8 +160,6 @@ int vips_image_written( VipsImage *image );
 void vips_image_preeval( VipsImage *image );
 void vips_image_eval( VipsImage *image, guint64 processed );
 void vips_image_posteval( VipsImage *image );
-gboolean vips_image_iskilled( VipsImage *image );
-void vips_image_set_kill( VipsImage *image, gboolean kill );
 VipsImage *vips_image_new_mode( const char *filename, const char *mode );
 
 int vips__formatalike_vec( VipsImage **in, VipsImage **out, int n );
@@ -188,7 +196,7 @@ int vips__draw_mask_direct( VipsImage *image, VipsImage *mask,
 typedef void (*VipsDrawPoint)( VipsImage *image, 
 	int x, int y, void *client ); 
 typedef void (*VipsDrawScanline)( VipsImage *image, 
-	int y, int x1, int x2, void *client );
+	int y, int x1, int x2, int quadrant, void *client );
 
 void vips__draw_line_direct( VipsImage *image, int x1, int y1, int x2, int y2,
 	VipsDrawPoint draw_point, void *client );
@@ -229,7 +237,10 @@ int vips__byteswap_bool( VipsImage *in, VipsImage **out, gboolean swap );
 
 char *vips__xml_properties( VipsImage *image );
 
-void vips__cairo2rgba( guint32 *buf, int n );
+void vips__premultiplied_bgra2rgba( guint32 * restrict p, int n );
+void vips__bgra2rgba( guint32 * restrict p, int n );
+void vips__Lab2LabQ_vec( VipsPel *out, float *in, int width );
+void vips__LabQ2Lab_vec( float *out, VipsPel *in, int width );
 
 #ifdef DEBUG_LEAK
 extern GQuark vips__image_pixels_quark;
@@ -248,10 +259,42 @@ int vips__foreign_convert_saveable( VipsImage *in, VipsImage **ready,
 	VipsSaveable saveable, VipsBandFormat *format, VipsCoding *coding,
 	VipsArrayDouble *background );
 
+int vips_foreign_load( const char *filename, VipsImage **out, ... )
+	__attribute__((sentinel));
+int vips_foreign_save( VipsImage *in, const char *filename, ... )
+	__attribute__((sentinel));
+
 int vips__image_intize( VipsImage *in, VipsImage **out );
 
 void vips__reorder_init( void );
 int vips__reorder_set_input( VipsImage *image, VipsImage **in );
+void vips__reorder_clear( VipsImage *image );
+
+/* Window manager API.
+ */
+VipsWindow *vips_window_take( VipsWindow *window, 
+	VipsImage *im, int top, int height );
+
+int vips__profile_set( VipsImage *image, const char *name );
+
+int vips__lrmosaic( VipsImage *ref, VipsImage *sec, VipsImage *out,
+	int bandno,
+	int xref, int yref, int xsec, int ysec,
+	int hwindowsize, int hsearchsize,
+	int balancetype,
+	int mwidth );
+
+int vips__tbmosaic( VipsImage *ref, VipsImage *sec, VipsImage *out,
+	int bandno,
+	int xref, int yref, int xsec, int ysec,
+	int hwindowsize, int hsearchsize,
+	int balancetype,
+	int mwidth );
+
+int vips__correl( VipsImage *ref, VipsImage *sec, 
+	int xref, int yref, int xsec, int ysec,
+	int hwindowsize, int hsearchsize,
+	double *correlation, int *x, int *y );
 
 #ifdef __cplusplus
 }

@@ -67,7 +67,7 @@ typedef struct _VipsFlatten {
 	 */
 	VipsArrayDouble *background;
 
-	/* The [double] converted to the input image format.
+	/* The [double] background converted to the input image format.
 	 */
 	VipsPel *ink;
 
@@ -99,28 +99,7 @@ G_DEFINE_TYPE( VipsFlatten, vips_flatten, VIPS_TYPE_CONVERSION );
 	} \
 }
 
-/* Flatten with any background.
- */
-#define VIPS_FLATTEN( TYPE ) { \
-	TYPE * restrict p = (TYPE *) in; \
-	TYPE * restrict q = (TYPE *) out; \
-	\
-	for( x = 0; x < width; x++ ) { \
-		TYPE alpha = p[bands - 1]; \
-		TYPE nalpha = max_alpha - alpha; \
-		TYPE * restrict bg = (TYPE *) flatten->ink; \
-		int b; \
-		\
-		for( b = 0; b < bands - 1; b++ ) \
-			q[b] = (p[b] * alpha) / max_alpha + \
-				(bg[b] * nalpha) / max_alpha; \
-		\
-		p += bands; \
-		q += bands - 1; \
-	} \
-}
-
-/* Same, but with float arithmetic. Necessary for int/uint to prevent
+/* Same, but with float arithmetic. Necessary for short/int to prevent
  * overflow.
  */
 #define VIPS_FLATTEN_BLACK_FLOAT( TYPE ) { \
@@ -139,6 +118,26 @@ G_DEFINE_TYPE( VipsFlatten, vips_flatten, VIPS_TYPE_CONVERSION );
 	} \
 }
 
+/* Flatten with any background.
+ */
+#define VIPS_FLATTEN( TYPE ) { \
+	TYPE * restrict p = (TYPE *) in; \
+	TYPE * restrict q = (TYPE *) out; \
+	\
+	for( x = 0; x < width; x++ ) { \
+		TYPE alpha = p[bands - 1]; \
+		TYPE nalpha = max_alpha - alpha; \
+		TYPE * restrict bg = (TYPE *) flatten->ink; \
+		int b; \
+		\
+		for( b = 0; b < bands - 1; b++ ) \
+			q[b] = (p[b] * alpha + bg[b] * nalpha) / max_alpha; \
+		\
+		p += bands; \
+		q += bands - 1; \
+	} \
+}
+
 #define VIPS_FLATTEN_FLOAT( TYPE ) { \
 	TYPE * restrict p = (TYPE *) in; \
 	TYPE * restrict q = (TYPE *) out; \
@@ -150,8 +149,8 @@ G_DEFINE_TYPE( VipsFlatten, vips_flatten, VIPS_TYPE_CONVERSION );
 		int b; \
 		\
 		for( b = 0; b < bands - 1; b++ ) \
-			q[b] = ((double) p[b] * alpha) / max_alpha + \
-				((double) bg[b] * nalpha) / max_alpha; \
+			q[b] = ((double) p[b] * alpha + \
+				(double) bg[b] * nalpha) / max_alpha; \
 		\
 		p += bands; \
 		q += bands - 1; \
@@ -188,11 +187,11 @@ vips_flatten_black_gen( VipsRegion *or, void *vseq, void *a, void *b,
 			break; 
 
 		case VIPS_FORMAT_USHORT: 
-			VIPS_FLATTEN_BLACK( unsigned short ); 
+			VIPS_FLATTEN_BLACK_FLOAT( unsigned short ); 
 			break; 
 
 		case VIPS_FORMAT_SHORT: 
-			VIPS_FLATTEN_BLACK( signed short ); 
+			VIPS_FLATTEN_BLACK_FLOAT( signed short ); 
 			break; 
 
 		case VIPS_FORMAT_UINT: 
@@ -253,11 +252,11 @@ vips_flatten_gen( VipsRegion *or, void *vseq, void *a, void *b,
 			break; 
 
 		case VIPS_FORMAT_USHORT: 
-			VIPS_FLATTEN( unsigned short ); 
+			VIPS_FLATTEN_FLOAT( unsigned short ); 
 			break; 
 
 		case VIPS_FORMAT_SHORT: 
-			VIPS_FLATTEN( signed short ); 
+			VIPS_FLATTEN_FLOAT( signed short ); 
 			break; 
 
 		case VIPS_FORMAT_UINT: 
@@ -412,9 +411,9 @@ vips_flatten_init( VipsFlatten *flatten )
 }
 
 /**
- * vips_flatten:
+ * vips_flatten: (method)
  * @in: input image
- * @out: output image
+ * @out: (out): output image
  * @...: %NULL-terminated list of optional named arguments
  *
  * Optional arguments:

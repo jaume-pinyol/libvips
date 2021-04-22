@@ -277,11 +277,10 @@ vips_worley_build( VipsObject *object )
 		VIPS_ROUND_UP( worley->height, worley->cell_size ) / 
 		worley->cell_size;
 
-	worley->seed = g_random_double() * 0xffffffffu;
-
 	vips_image_init_fields( create->out,
 		worley->width, worley->height, 1,
-		VIPS_FORMAT_FLOAT, VIPS_CODING_NONE, VIPS_INTERPRETATION_B_W,
+		VIPS_FORMAT_FLOAT, VIPS_CODING_NONE, 
+		VIPS_INTERPRETATION_MULTIBAND,
 		1.0, 1.0 );
 	vips_image_pipelinev( create->out,
 		VIPS_DEMAND_STYLE_ANY, NULL );
@@ -327,17 +326,25 @@ vips_worley_class_init( VipsWorleyClass *class )
 		G_STRUCT_OFFSET( VipsWorley, cell_size ),
 		1, VIPS_MAX_COORD, 256 );
 
+	VIPS_ARG_INT( class, "seed", 4, 
+		_( "Seed" ), 
+		_( "Random number seed" ),
+		VIPS_ARGUMENT_OPTIONAL_INPUT,
+		G_STRUCT_OFFSET( VipsWorley, seed ),
+		INT_MIN, INT_MAX, 0 );
+
 }
 
 static void
 vips_worley_init( VipsWorley *worley )
 {
 	worley->cell_size = 256;
+	worley->seed = UINT_MAX * g_random_double();
 }
 
 /**
  * vips_worley:
- * @out: output image
+ * @out: (out): output image
  * @width: horizontal size
  * @height: vertical size
  * @...: %NULL-terminated list of optional named arguments

@@ -409,7 +409,7 @@ vips_stats_class_init( VipsStatsClass *class )
 	gobject_class->get_property = vips_object_get_property;
 
 	object_class->nickname = "stats";
-	object_class->description = _( "find image average" );
+	object_class->description = _( "find many image stats" );
 	object_class->build = vips_stats_build;
 
 	sclass->start = vips_stats_start;
@@ -429,9 +429,9 @@ vips_stats_init( VipsStats *stats )
 }
 
 /**
- * vips_stats:
+ * vips_stats: (method)
  * @in: image to scan
- * @out: image of statistics
+ * @out: (out): image of statistics
  * @...: %NULL-terminated list of optional named arguments
  *
  * Find many image statistics in a single pass through the data. @out is a

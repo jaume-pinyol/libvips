@@ -92,7 +92,7 @@ read_destroy( Read *read )
 	VIPS_FREEF( Mat_VarFree, read->var );
 	VIPS_FREEF( Mat_Close, read->mat );
 
-	vips_free( read );
+	g_free( read );
 }
 
 static Read *
@@ -323,7 +323,7 @@ vips__mat_ismat( const char *filename )
 {
 	unsigned char buf[15];
 
-	if( vips__get_bytes( filename, buf, 10 ) &&
+	if( vips__get_bytes( filename, buf, 10 ) == 10 &&
 		vips_isprefix( "MATLAB 5.0", (char *) buf ) )
 		return( 1 );
 

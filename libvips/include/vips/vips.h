@@ -46,6 +46,8 @@
  * 	- include <time.h>, thanks nicola
  * 30/6/09
  * 	- move deprecated stuff to its own header
+ * 16/5/18
+ * 	- remove old vips7 stuff, you must explicitly include it now
  */
 
 /*
@@ -78,14 +80,18 @@
 #ifndef VIPS_VIPS_H
 #define VIPS_VIPS_H
 
-#ifdef __cplusplus
-extern "C" {
-#endif /*__cplusplus*/
-
 #include <glib.h>
 #include <glib/gstdio.h>
 #include <gmodule.h>
 #include <glib-object.h>
+
+/* Needed for VipsGInputStream.
+ */
+#include <gio/gio.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif /*__cplusplus*/
 
 /* If we're being parsed by SWIG, remove gcc attributes.
  */
@@ -111,6 +117,8 @@ extern "C" {
 #include <vips/object.h>
 #include <vips/type.h>
 #include <vips/gate.h>
+#include <vips/connection.h>
+#include <vips/sbuf.h>
 
 #include <vips/version.h>
 #include <vips/rect.h>
@@ -145,21 +153,6 @@ extern "C" {
 #include <vips/draw.h>
 #include <vips/create.h>
 #include <vips/video.h>
-#include <vips/cimg_funcs.h>
-
-/* This stuff is very, very old and should not be used by anyone now.
- */
-#ifdef VIPS_ENABLE_ANCIENT
-#include <vips/deprecated.h>
-#endif /*VIPS_ENABLE_ANCIENT*/
-
-/* Still in use, but can be turned off.
- */
-#ifdef VIPS_ENABLE_DEPRECATED
-#include <vips/vips7compat.h>
-#include <vips/dispatch.h>
-#include <vips/almostdeprecated.h>
-#endif /*VIPS_ENABLE_DEPRECATED*/
 
 /* We can't use _ here since this will be compiled by our clients and they may
  * not have _().
