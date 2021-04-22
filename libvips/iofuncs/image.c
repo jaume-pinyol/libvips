@@ -2660,7 +2660,8 @@ vips_image_write( VipsImage *image, VipsImage *out )
 int
 vips_image_write_to_file( VipsImage *image, const char *name, ... )
 {
-	char filename[VIPS_PATH_MAX];
+    printf("vips_image_write_to_file %s<<<\n", name);
+    char filename[VIPS_PATH_MAX];
 	char option_string[VIPS_PATH_MAX];
 	const char *operation_name;
 	va_list ap;
@@ -2678,7 +2679,9 @@ vips_image_write_to_file( VipsImage *image, const char *name, ... )
 	vips_error_thaw();
 
 	if( operation_name ) {
-		VipsTarget *target;
+        printf("vips_image_write_to_file %s<<<\n", operation_name);
+
+        VipsTarget *target;
 
 		if( !(target = vips_target_new_to_file( filename )) )
 			return( -1 );
@@ -2691,7 +2694,9 @@ vips_image_write_to_file( VipsImage *image, const char *name, ... )
 		VIPS_UNREF( target );
 	}
 	else if( (operation_name = vips_foreign_find_save( filename )) ) {
-		va_start( ap, name );
+        printf("vips_image_write_to_file vips_foreign_find_save\n", operation_name);
+
+        va_start( ap, name );
 		result = vips_call_split_option_string( operation_name, 
 			option_string, ap, image, filename );
 		va_end( ap );

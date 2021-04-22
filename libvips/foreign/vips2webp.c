@@ -559,6 +559,7 @@ vips__webp_write_target( VipsImage *image, VipsTarget *target,
 	gboolean strip, const char *profile )
 {
 	VipsWebPWrite write;
+	printf("vips__webp_write_target %d %d \n", kmin, kmax);
 
 	if( vips_webp_write_init( &write, image,
 		Q, lossless, preset, smart_subsample, near_lossless,

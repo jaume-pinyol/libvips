@@ -247,8 +247,12 @@ G_DEFINE_TYPE( VipsForeignSaveWebpTarget, vips_foreign_save_webp_target,
 static int
 vips_foreign_save_webp_target_build( VipsObject *object )
 {
+    printf("vips_foreign_save_webp_target_build<<<\n");
+
 	VipsForeignSave *save = (VipsForeignSave *) object;
 	VipsForeignSaveWebp *webp = (VipsForeignSaveWebp *) object;
+
+
 	VipsForeignSaveWebpTarget *target = 
 		(VipsForeignSaveWebpTarget *) object;
 
@@ -271,6 +275,8 @@ static void
 vips_foreign_save_webp_target_class_init( 
 	VipsForeignSaveWebpTargetClass *class )
 {
+        printf("vips_foreign_save_webp_target_class_init<<<\n");
+
 	GObjectClass *gobject_class = G_OBJECT_CLASS( class );
 	VipsObjectClass *object_class = (VipsObjectClass *) class;
 
@@ -312,6 +318,7 @@ G_DEFINE_TYPE( VipsForeignSaveWebpFile, vips_foreign_save_webp_file,
 static int
 vips_foreign_save_webp_file_build( VipsObject *object )
 {
+    printf("vips_foreign_save_webp_file_build<<<\n");
 	VipsForeignSave *save = (VipsForeignSave *) object;
 	VipsForeignSaveWebp *webp = (VipsForeignSaveWebp *) object;
 	VipsForeignSaveWebpFile *file = (VipsForeignSaveWebpFile *) object;
@@ -419,6 +426,8 @@ static void
 vips_foreign_save_webp_buffer_class_init( 
 	VipsForeignSaveWebpBufferClass *class )
 {
+                printf("vips_foreign_save_webp_buffer_class_init<<<\n");
+
 	GObjectClass *gobject_class = G_OBJECT_CLASS( class );
 	VipsObjectClass *object_class = (VipsObjectClass *) class;
 
@@ -455,6 +464,8 @@ G_DEFINE_TYPE( VipsForeignSaveWebpMime, vips_foreign_save_webp_mime,
 static int
 vips_foreign_save_webp_mime_build( VipsObject *object )
 {
+                    printf("vips_foreign_save_webp_mime_build<<<\n");
+
 	VipsForeignSave *save = (VipsForeignSave *) object;
 	VipsForeignSaveWebp *webp = (VipsForeignSaveWebp *) object;
 

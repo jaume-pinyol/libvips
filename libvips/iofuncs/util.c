@@ -1560,9 +1560,13 @@ void
 vips__filename_split8( const char *name, char *filename, char *option_string )
 {
 	char *p;
-
+    char str[1000];
 	vips_strncpy( filename, name, VIPS_PATH_MAX );
-	if( (p = (char *) vips__find_rightmost_brackets( filename )) ) {
+    strcpy(str, filename);
+//    if (strcmp()
+  //  strcat(str, "[n=-1]");
+	printf("vips__filename_split8 %s\n", str);
+	if( (p = (char *) vips__find_rightmost_brackets( str )) ) {
 		vips_strncpy( option_string, p, VIPS_PATH_MAX );
 		*p = '\0';
 	}

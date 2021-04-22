@@ -275,6 +275,7 @@ thumbnail_write_file( VipsObject *process, VipsImage *im, const char *filename )
 static int
 thumbnail_process( VipsObject *process, const char *name )
 {
+    printf("Processing thumbnail %s\n", name);
 	VipsInteresting interesting;
 	VipsImage *image;
 	VipsIntent intent;
@@ -304,6 +305,7 @@ thumbnail_process( VipsObject *process, const char *name )
 	}
 
 	vips__filename_split8( name, filename, option_string );
+    printf("%s %s\n", filename, option_string);
 	if( strcmp( filename, "stdin" ) == 0 ) {
 		VipsSource *source;
 
@@ -328,6 +330,7 @@ thumbnail_process( VipsObject *process, const char *name )
 		VIPS_UNREF( source );
 	}
 	else {
+        printf("from disk\n");
 		if( vips_thumbnail( name, &image, thumbnail_width, 
 			"height", thumbnail_height, 
 			"size", size_restriction, 

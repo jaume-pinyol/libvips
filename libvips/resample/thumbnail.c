@@ -955,6 +955,7 @@ vips_thumbnail_build( VipsObject *object )
 static void
 vips_thumbnail_class_init( VipsThumbnailClass *class )
 {
+    printf("vips_thumbnail_class_init <<<\n");
 	GObjectClass *gobject_class = G_OBJECT_CLASS( class );
 	VipsObjectClass *vobject_class = VIPS_OBJECT_CLASS( class );
 	VipsOperationClass *operation_class = VIPS_OPERATION_CLASS( class );
@@ -1104,9 +1105,11 @@ vips_thumbnail_file_get_info( VipsThumbnail *thumbnail )
 static VipsImage *
 vips_thumbnail_file_open( VipsThumbnail *thumbnail, double factor )
 {
+    printf("vips_thumbnail_file_open <<<\n");
 	VipsThumbnailFile *file = (VipsThumbnailFile *) thumbnail;
 
 	if( vips_isprefix( "VipsForeignLoadJpeg", thumbnail->loader ) ) {
+        printf("vips_thumbnail_file_open 1\n");
 		return( vips_image_new_from_file( file->filename, 
 			"access", VIPS_ACCESS_SEQUENTIAL,
 			"shrink", (int) factor,
@@ -1114,6 +1117,7 @@ vips_thumbnail_file_open( VipsThumbnail *thumbnail, double factor )
 	}
 	else if( vips_isprefix( "VipsForeignLoadOpenslide", 
 		thumbnail->loader ) ) {
+        printf("vips_thumbnail_file_open 2\n");
 		return( vips_image_new_from_file( file->filename, 
 			"access", VIPS_ACCESS_SEQUENTIAL,
 			"level", (int) factor,
@@ -1122,12 +1126,14 @@ vips_thumbnail_file_open( VipsThumbnail *thumbnail, double factor )
 	else if( vips_isprefix( "VipsForeignLoadPdf", thumbnail->loader ) ||
 		vips_isprefix( "VipsForeignLoadSvg", thumbnail->loader ) ||
 		vips_isprefix( "VipsForeignLoadWebp", thumbnail->loader ) ) {
+        printf("vips_thumbnail_file_open 3\n");
 		return( vips_image_new_from_file( file->filename, 
 			"access", VIPS_ACCESS_SEQUENTIAL,
 			"scale", 1.0 / factor,
 			NULL ) );
 	}
 	else if( vips_isprefix( "VipsForeignLoadJp2k", thumbnail->loader ) ) {
+        printf("vips_thumbnail_file_open 4\n");
 		/* jp2k optionally uses page-based pyramids.
 		 */
 		if( thumbnail->page_pyramid )
@@ -1141,6 +1147,7 @@ vips_thumbnail_file_open( VipsThumbnail *thumbnail, double factor )
 				NULL ) );
 	}
 	else if( vips_isprefix( "VipsForeignLoadTiff", thumbnail->loader ) ) {
+        printf("vips_thumbnail_file_open 5\n");
 		/* We support three modes: subifd pyramids, page-based
 		 * pyramids, and simple multi-page TIFFs (no pyramid).
 		 */
@@ -1160,12 +1167,14 @@ vips_thumbnail_file_open( VipsThumbnail *thumbnail, double factor )
 				NULL ) );
 	}
 	else if( vips_isprefix( "VipsForeignLoadHeif", thumbnail->loader ) ) {
+        printf("vips_thumbnail_file_open 6\n");
 		return( vips_image_new_from_file( file->filename, 
 			"access", VIPS_ACCESS_SEQUENTIAL,
 			"thumbnail", (int) factor,
 			NULL ) );
 	}
 	else {
+        printf("vips_thumbnail_file_open 7 %s\n", file->filename);
 		return( vips_image_new_from_file( file->filename, 
 			"access", VIPS_ACCESS_SEQUENTIAL,
 			NULL ) );
