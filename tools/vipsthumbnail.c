@@ -307,6 +307,7 @@ thumbnail_process( VipsObject *process, const char *name )
 	vips__filename_split8( name, filename, option_string );
     printf("%s %s\n", filename, option_string);
 	if( strcmp( filename, "stdin" ) == 0 ) {
+        printf("from source\n");
 		VipsSource *source;
 
 		if( !(source = 
