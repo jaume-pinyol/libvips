@@ -30,3 +30,6 @@ if test_supported svgload_source; then
 	./test_descriptors $test_images/logo.svg
 fi
 
+if test_supported jpegload_source; then
+	./test_resize_on_load $test_images/bad-width.jpg
+fi

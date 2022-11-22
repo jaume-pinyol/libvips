@@ -60,3 +60,22 @@ test('descriptors',
     depends: test_descriptors,
     workdir: meson.current_build_dir(),
 )
+
+
+test_resize_on_load = executable('test_resize_on_load',
+    'test_resize_on_load.c',
+    dependencies: libvips_dep,
+)
+
+test_resize_on_load_sh = configure_file(
+
+    input: 'test_resize_on_load.sh',
+    output: 'test_resize_on_load.sh',
+    copy: true,
+)
+
+test('test_resize_on_load',
+    test_resize_on_load_sh,
+    depends: test_resize_on_load,
+    workdir: meson.current_build_dir(),
+)
