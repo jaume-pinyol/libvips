@@ -485,8 +485,11 @@ vips_object_sanity( VipsObject *object )
 		vips_object_print_name( object );
 		printf( " %s\n", vips_buf_all( &buf ) );
 
-		return( FALSE );
+        printf( "vips_object_sanity>>>> error\n" );
+        return( FALSE );
 	}
+
+    printf( "vips_object_sanity>>>>\n" );
 
 	return( TRUE );
 }

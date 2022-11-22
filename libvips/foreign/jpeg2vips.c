@@ -230,13 +230,14 @@ typedef struct {
 static void
 source_init_source( j_decompress_ptr cinfo )
 {
-	Source *src = (Source *) cinfo->src;
-
+    printf("source_init_source<<<<\n");
+    Source *src = (Source *) cinfo->src;
 	/* Start off empty ... libjpeg will call fill_input_buffer to get the
 	 * first bytes.
 	 */
 	src->pub.next_input_byte = src->buf;
 	src->pub.bytes_in_buffer = 0;
+    printf("source_init_source>>>\n");
 }
 
 /* Fill the input buffer --- called whenever buffer is emptied.
@@ -244,7 +245,9 @@ source_init_source( j_decompress_ptr cinfo )
 static boolean
 source_fill_input_buffer( j_decompress_ptr cinfo )
 {
-	static const JOCTET eoi_buffer[4] = {
+    printf("source_fill_input_buffer<<<<\n");
+
+    static const JOCTET eoi_buffer[4] = {
 		(JOCTET) 0xFF, (JOCTET) JPEG_EOI, 0, 0
 	};
 
@@ -271,13 +274,17 @@ source_fill_input_buffer( j_decompress_ptr cinfo )
 		src->pub.bytes_in_buffer = 2;
 	}
 
-	return( TRUE );
+    printf("source_fill_input_buffer>>>>\n");
+
+    return( TRUE );
 }
 
 static void
 skip_input_data( j_decompress_ptr cinfo, long num_bytes )
 {
-	Source *src = (Source *) cinfo->src;
+    printf("skip_input_data<<<<\n");
+
+    Source *src = (Source *) cinfo->src;
 
 	if( num_bytes > 0 ) {
 		while (num_bytes > (long) src->pub.bytes_in_buffer) {
@@ -297,7 +304,9 @@ skip_input_data( j_decompress_ptr cinfo, long num_bytes )
 static int
 readjpeg_open_input( ReadJpeg *jpeg )
 {
-	j_decompress_ptr cinfo = &jpeg->cinfo;
+    printf("readjpeg_open_input<<<<\n");
+
+    j_decompress_ptr cinfo = &jpeg->cinfo;
 
 	if( jpeg->source &&
 		!cinfo->src ) {
@@ -322,13 +331,16 @@ readjpeg_open_input( ReadJpeg *jpeg )
 		src->pub.next_input_byte = src->buf;
 	}
 
+    printf("readjpeg_open_input>>>>\n");
 	return( 0 );
 }
 
 static void
 readjpeg_emit_message( j_common_ptr cinfo, int msg_level )
 {
-        ReadJpeg *jpeg  = (ReadJpeg *) cinfo->client_data;
+    printf("readjpeg_emit_message<<<<\n");
+
+    ReadJpeg *jpeg  = (ReadJpeg *) cinfo->client_data;
 
 	long num_warnings;
 
@@ -358,7 +370,9 @@ readjpeg_emit_message( j_common_ptr cinfo, int msg_level )
 static int
 readjpeg_free( ReadJpeg *jpeg )
 {
-	if( jpeg->eman.pub.num_warnings != 0 ) {
+    printf("readjpeg_free<<<<\n");
+
+    if( jpeg->eman.pub.num_warnings != 0 ) {
 		g_warning( _( "read gave %ld warnings" ), 
 			jpeg->eman.pub.num_warnings );
 		g_warning( "%s", vips_error_buffer() );
@@ -399,7 +413,9 @@ readjpeg_new( VipsSource *source, VipsImage *out,
 	int shrink, VipsFailOn fail_on, gboolean autorotate, 
         gboolean unlimited )
 {
-	ReadJpeg *jpeg;
+    printf("readjpeg_new<<<<\n");
+
+    ReadJpeg *jpeg;
 
 	if( !(jpeg = VIPS_NEW( out, ReadJpeg )) )
 		return( NULL );
@@ -438,10 +454,12 @@ readjpeg_new( VipsSource *source, VipsImage *out,
 static const char *
 find_chroma_subsample( struct jpeg_decompress_struct *cinfo )
 {
-	/* libjpeg only uses 4:4:4 and 4:2:0, confusingly. 
-	 *
-	 * http://poynton.ca/PDFs/Chroma_subsampling_notation.pdf
-	 */
+    printf("find_chroma_subsample<<<<\n");
+
+    /* libjpeg only uses 4:4:4 and 4:2:0, confusingly.
+     *
+     * http://poynton.ca/PDFs/Chroma_subsampling_notation.pdf
+     */
 	gboolean has_subsample = cinfo->max_h_samp_factor > 1 ||
 		cinfo->max_v_samp_factor > 1;
 	gboolean is_cmyk = cinfo->num_components > 3;
@@ -454,13 +472,15 @@ find_chroma_subsample( struct jpeg_decompress_struct *cinfo )
 static int
 attach_blob( VipsImage *im, const char *field, void *data, size_t data_length )
 {
-	/* Only use the first one.
-	 */
+    printf("attach_blob<<<<\n");
+
+    /* Only use the first one.
+     */
 	if( vips_image_get_typeof( im, field ) ) {
 #ifdef DEBUG
 		printf( "attach_blob: second %s block, ignoring\n", field );
 #endif /*DEBUG*/
-
+        printf("attach_blob 1>>>\n");
 		return( 0 );
 	}
 
@@ -470,6 +490,7 @@ attach_blob( VipsImage *im, const char *field, void *data, size_t data_length )
 #endif /*DEBUG*/
 
 	vips_image_set_blob_copy( im, field, data, data_length );
+    printf("attach_blob 2>>>\n");
 
 	return( 0 );
 }
@@ -481,7 +502,9 @@ attach_blob( VipsImage *im, const char *field, void *data, size_t data_length )
 static int
 attach_xmp_blob( VipsImage *im, void *data, size_t data_length )
 {
-	char *p = (char *) data;
+    printf("attach_xmp_blob<<<<\n");
+
+    char *p = (char *) data;
 	int i;
 
 	if( data_length < 4 ||
@@ -514,7 +537,9 @@ attach_xmp_blob( VipsImage *im, void *data, size_t data_length )
 static int
 read_jpeg_header( ReadJpeg *jpeg, VipsImage *out )
 {
-	struct jpeg_decompress_struct *cinfo = &jpeg->cinfo;
+    printf("read_jpeg_header<<<<\n");
+
+    struct jpeg_decompress_struct *cinfo = &jpeg->cinfo;
 
 	jpeg_saved_marker_ptr p;
 	VipsInterpretation interpretation;
@@ -793,7 +818,9 @@ static int
 read_jpeg_generate( VipsRegion *or, 
 	void *seq, void *a, void *b, gboolean *stop )
 {
-        VipsRect *r = &or->valid;
+    printf("read_jpeg_generate<<<<\n");
+
+    VipsRect *r = &or->valid;
 	ReadJpeg *jpeg = (ReadJpeg *) a;
 	struct jpeg_decompress_struct *cinfo = &jpeg->cinfo;
 	int sz = cinfo->output_width * cinfo->output_components;
@@ -886,7 +913,9 @@ read_jpeg_generate( VipsRegion *or,
 static int
 read_jpeg_image( ReadJpeg *jpeg, VipsImage *out )
 {
-	struct jpeg_decompress_struct *cinfo = &jpeg->cinfo;
+    printf("read_jpeg_image<<<<\n");
+
+    struct jpeg_decompress_struct *cinfo = &jpeg->cinfo;
 	VipsImage **t = (VipsImage **) 
 		vips_object_local_array( VIPS_OBJECT( out ), 5 );
 
@@ -916,7 +945,9 @@ read_jpeg_image( ReadJpeg *jpeg, VipsImage *out )
 	/* We must crop after the seq, or our generate may not be asked for
 	 * full lines of pixels and will attempt to write beyond the buffer.
 	 */
-	if( vips_image_generate( t[0], 
+    printf("read_jpeg_image<<<< vips_image_generate <<<\n");
+
+    if( vips_image_generate( t[0],
 		NULL, read_jpeg_generate, NULL, 
 		jpeg, NULL ) ||
 		vips_sequential( t[0], &t[1], 
@@ -947,9 +978,11 @@ read_jpeg_image( ReadJpeg *jpeg, VipsImage *out )
 static int
 vips__jpeg_read( ReadJpeg *jpeg, VipsImage *out, gboolean header_only )
 {
-	/* Need to read in APP1 (EXIF metadata), APP2 (ICC profile), APP13
-	 * (photoshop IPTC) and APP14 (Adobe flags).
-	 */
+    printf("vips__jpeg_read<<<<\n");
+
+    /* Need to read in APP1 (EXIF metadata), APP2 (ICC profile), APP13
+     * (photoshop IPTC) and APP14 (Adobe flags).
+     */
 	jpeg_save_markers( &jpeg->cinfo, JPEG_APP0 + 1, 0xffff );
 	jpeg_save_markers( &jpeg->cinfo, JPEG_APP0 + 2, 0xffff );
 	jpeg_save_markers( &jpeg->cinfo, JPEG_APP0 + 13, 0xffff );
@@ -998,21 +1031,30 @@ vips__jpeg_read_source( VipsSource *source, VipsImage *out,
 	gboolean header_only, int shrink, VipsFailOn fail_on, 
 	gboolean autorotate, gboolean unlimited )
 {
-	ReadJpeg *jpeg;
+    printf("vips__jpeg_read_source<<<<\n");
+
+    ReadJpeg *jpeg;
 
 	if( !(jpeg = readjpeg_new( source, out, shrink, fail_on, 
-		autorotate, unlimited )) )
-		return( -1 );
+		autorotate, unlimited )) ) {
+        printf("vips__jpeg_read_source error 0<<<<\n");
+        return (-1);
+    }
 
 	/* Here for longjmp() from vips__new_error_exit() during
 	 * cinfo->mem->alloc_small() or jpeg_read_header().
 	 */
-	if( setjmp( jpeg->eman.jmp ) ) 
-		return( -1 );
+	if( setjmp( jpeg->eman.jmp ) ) {
+        printf("vips__jpeg_read_source error 1<<<<\n");
+        return (-1);
+    }
 
 	if( readjpeg_open_input( jpeg ) ||
-		vips__jpeg_read( jpeg, out, header_only ) )
-		return( -1 );
+		vips__jpeg_read( jpeg, out, header_only ) ) {
+        printf("vips__jpeg_read_source error 2<<<<\n");
+
+        return (-1);
+    }
 
 	if( header_only )
 		vips_source_minimise( source );
@@ -1023,7 +1065,9 @@ vips__jpeg_read_source( VipsSource *source, VipsImage *out,
 int
 vips__isjpeg_source( VipsSource *source )
 {
-	const unsigned char *p;
+    printf("vips__isjpeg_source<<<<\n");
+
+    const unsigned char *p;
 
 	if( (p = vips_source_sniff( source, 2 )) &&
 		p[0] == 0xff && 

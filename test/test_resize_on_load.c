@@ -56,13 +56,16 @@ main( int argc, char **argv )
 
 	/* Opening an image should read the header, then close the fd.
 	 */
-	printf( "** rand open ..\n" );
+	printf( "** rand open .. %s\n", argv[1] );
 	if( !(source = vips_source_new_from_file( argv[1] )) )
-		vips_error_exit( NULL );
+		vips_error_exit( "Unable to generate source" );
 
 
+    printf( "Loading image from source\n");
 	if( (vips_jpegload_source(source, &image, "shrink", 8, NULL )) )
-		vips_error_exit( NULL );
+		vips_error_exit( "Unable to jpegload from source" );
+
+    printf( "Loaded image from source\n");
 	if( count_files( fd_dir ) != n_files )
 		vips_error_exit( "%s: fd not closed after header read", 
 			argv[1] );
@@ -73,22 +76,10 @@ main( int argc, char **argv )
 	printf( "** crop1, avg ..\n" );
 	if( vips_crop( image, &x, 0, 0, image->Xsize, 10, NULL ) ||
 		vips_avg( x, &average, NULL ) )
-		vips_error_exit( NULL );
+		vips_error_exit( "Unable to crop or avg"  );
 	g_object_unref( x );
 	if( count_files( fd_dir ) != n_files )
 		vips_error_exit( "%s: fd not closed after first read", 
-			argv[1] );
-
-	/* We should be able to read again, a little further down, and have
-	 * the input restarted and closed again.
-	 */
-	printf( "** crop2, avg ..\n" );
-	if( vips_crop( image, &x, 0, 20, image->Xsize, 10, NULL ) ||
-		vips_avg( x, &average, NULL ) )
-		vips_error_exit( NULL );
-	g_object_unref( x );
-	if( count_files( fd_dir ) != n_files )
-		vips_error_exit( "%s: fd not closed after second read", 
 			argv[1] );
 
 	/* Clean up, and we should still just have three open.

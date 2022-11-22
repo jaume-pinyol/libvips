@@ -675,12 +675,13 @@ vips_image_generate( VipsImage *image,
         void *a, void *b )
 {
         int res;
-
+    printf("vips_image_generate<<< \n");
 	VIPS_DEBUG_MSG( "vips_image_generate: %p\n", image ); 
 
 	g_assert( generate_fn );
 	g_assert( vips_object_sanity( VIPS_OBJECT( image ) ) );
 
+    printf("vips_image_generate what??");
 	if( !image->hint_set ) {
 		vips_error( "vips_image_generate", 
 			"%s", _( "demand hint not set" ) );
@@ -701,7 +702,7 @@ vips_image_generate( VipsImage *image,
                 if( image->generate_fn || 
 			image->start_fn || 
 			image->stop_fn ) {
-                        vips_error( "VipsImage", 
+                        vips_error( "VipsImage",
 				"%s", _( "generate() called twice" ) );
                         return( -1 );
                 }

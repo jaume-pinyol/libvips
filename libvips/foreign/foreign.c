@@ -1123,6 +1123,7 @@ vips_foreign_load_build( VipsObject *object )
 		/* Then 'start' creates the real image and 'gen' fetches 
 		 * pixels for @out from @real on demand.
 		 */
+        printf("vips_foreign_load_build<<<vips_image_generate \n");
 		if( vips_image_generate( load->out, 
 			vips_foreign_load_start, 
 			vips_foreign_load_generate, 

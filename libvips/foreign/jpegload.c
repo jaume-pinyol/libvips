@@ -141,6 +141,7 @@ static int
 vips_foreign_load_jpeg_header( VipsForeignLoad *load )
 {
 	VipsForeignLoadJpeg *jpeg = (VipsForeignLoadJpeg *) load;
+    printf("vips_foreign_load_jpeg_header shrink: %d<<<\n", jpeg->shrink);
 
 	if( vips__jpeg_read_source( jpeg->source, 
 		load->out, TRUE, jpeg->shrink, load->fail_on, 
@@ -153,19 +154,27 @@ vips_foreign_load_jpeg_header( VipsForeignLoad *load )
 static int
 vips_foreign_load_jpeg_load( VipsForeignLoad *load )
 {
-	VipsForeignLoadJpeg *jpeg = (VipsForeignLoadJpeg *) load;
+
+    VipsForeignLoadJpeg *jpeg = (VipsForeignLoadJpeg *) load;
+    printf("vips_foreign_load_jpeg_load shrink: %d<<<\n", jpeg->shrink);
 
 	if( vips__jpeg_read_source( jpeg->source,
 		load->real, FALSE, jpeg->shrink, load->fail_on, 
-		jpeg->autorotate, jpeg->unlimited ) )
-		return( -1 );
+		jpeg->autorotate, jpeg->unlimited ) ) {
+        printf("vips_foreign_load_jpeg_load error >>>\n");
 
-	return( 0 );
+        return (-1);
+    }
+
+    printf("vips_foreign_load_jpeg_load >>>\n");
+
+    return( 0 );
 }
 
 static void
 vips_foreign_load_jpeg_class_init( VipsForeignLoadJpegClass *class )
 {
+    printf("vips_foreign_load_jpeg_class_init <<<\n");
 	GObjectClass *gobject_class = G_OBJECT_CLASS( class );
 	VipsObjectClass *object_class = (VipsObjectClass *) class;
 	VipsForeignClass *foreign_class = (VipsForeignClass *) class;
@@ -210,6 +219,8 @@ vips_foreign_load_jpeg_class_init( VipsForeignLoadJpegClass *class )
 		G_STRUCT_OFFSET( VipsForeignLoadJpeg, unlimited ),
 		FALSE );
 
+    printf("vips_foreign_load_jpeg_class_init >>>\n");
+
 }
 
 static void
@@ -233,7 +244,9 @@ G_DEFINE_TYPE( VipsForeignLoadJpegSource, vips_foreign_load_jpeg_source,
 static int
 vips_foreign_load_jpeg_source_build( VipsObject *object )
 {
-	VipsForeignLoadJpeg *jpeg = (VipsForeignLoadJpeg *) object;
+    printf("vips_foreign_load_jpeg_source_build <<<\n");
+
+    VipsForeignLoadJpeg *jpeg = (VipsForeignLoadJpeg *) object;
 	VipsForeignLoadJpegSource *source = 
 		(VipsForeignLoadJpegSource *) object;
 
@@ -252,14 +265,18 @@ vips_foreign_load_jpeg_source_build( VipsObject *object )
 static gboolean
 vips_foreign_load_jpeg_source_is_a_source( VipsSource *source )
 {
-	return( vips__isjpeg_source( source ) );
+    printf("vips_foreign_load_jpeg_source_is_a_source <<<\n");
+
+    return( vips__isjpeg_source( source ) );
 }
 
 static void
 vips_foreign_load_jpeg_source_class_init( 
 	VipsForeignLoadJpegSourceClass *class )
 {
-	GObjectClass *gobject_class = G_OBJECT_CLASS( class );
+    printf("vips_foreign_load_jpeg_source_class_init <<<\n");
+
+    GObjectClass *gobject_class = G_OBJECT_CLASS( class );
 	VipsObjectClass *object_class = (VipsObjectClass *) class;
 	VipsOperationClass *operation_class = VIPS_OPERATION_CLASS( class );
 	VipsForeignLoadClass *load_class = (VipsForeignLoadClass *) class;
@@ -304,7 +321,9 @@ G_DEFINE_TYPE( VipsForeignLoadJpegFile, vips_foreign_load_jpeg_file,
 static int
 vips_foreign_load_jpeg_file_build( VipsObject *object )
 {
-	VipsForeignLoadJpeg *jpeg = (VipsForeignLoadJpeg *) object;
+    printf("vips_foreign_load_jpeg_file_build <<<\n");
+
+    VipsForeignLoadJpeg *jpeg = (VipsForeignLoadJpeg *) object;
 	VipsForeignLoadJpegFile *file = (VipsForeignLoadJpegFile *) object;
 
 	if( file->filename &&
@@ -325,7 +344,9 @@ vips_foreign_load_jpeg_file_is_a( const char *filename )
 	VipsSource *source;
 	gboolean result;
 
-	if( !(source = vips_source_new_from_file( filename )) ) 
+    printf("vips_foreign_load_jpeg_file_is_a %s<<<\n", filename);
+
+    if( !(source = vips_source_new_from_file( filename )) )
 		return( FALSE );
 	result = vips_foreign_load_jpeg_source_is_a_source( source );
 	VIPS_UNREF( source );
@@ -336,7 +357,9 @@ vips_foreign_load_jpeg_file_is_a( const char *filename )
 static void
 vips_foreign_load_jpeg_file_class_init( VipsForeignLoadJpegFileClass *class )
 {
-	GObjectClass *gobject_class = G_OBJECT_CLASS( class );
+    printf("vips_foreign_load_jpeg_file_class_init<<<\n");
+
+    GObjectClass *gobject_class = G_OBJECT_CLASS( class );
 	VipsObjectClass *object_class = (VipsObjectClass *) class;
 	VipsForeignClass *foreign_class = (VipsForeignClass *) class;
 	VipsForeignLoadClass *load_class = (VipsForeignLoadClass *) class;
@@ -380,7 +403,9 @@ G_DEFINE_TYPE( VipsForeignLoadJpegBuffer, vips_foreign_load_jpeg_buffer,
 static int
 vips_foreign_load_jpeg_buffer_build( VipsObject *object )
 {
-	VipsForeignLoadJpeg *jpeg = (VipsForeignLoadJpeg *) object;
+    printf("vips_foreign_load_jpeg_buffer_build<<<\n");
+
+    VipsForeignLoadJpeg *jpeg = (VipsForeignLoadJpeg *) object;
 	VipsForeignLoadJpegBuffer *buffer = 
 		(VipsForeignLoadJpegBuffer *) object;
 
@@ -513,7 +538,9 @@ vips_foreign_load_jpeg_buffer_init( VipsForeignLoadJpegBuffer *buffer )
 int
 vips_jpegload( const char *filename, VipsImage **out, ... )
 {
-	va_list ap;
+    printf("vips_jpegload<<<\n");
+
+    va_list ap;
 	int result;
 
 	va_start( ap, out );
@@ -550,7 +577,9 @@ vips_jpegload( const char *filename, VipsImage **out, ... )
 int
 vips_jpegload_buffer( void *buf, size_t len, VipsImage **out, ... )
 {
-	va_list ap;
+    printf("vips_jpegload_buffer<<<\n");
+
+    va_list ap;
 	VipsBlob *blob;
 	int result;
 
@@ -592,10 +621,11 @@ vips_jpegload_source( VipsSource *source, VipsImage **out, ... )
 {
 	va_list ap;
 	int result;
-
+    printf("vips_jpegload_source<<<<\n");
 	va_start( ap, out );
 	result = vips_call_split( "jpegload_source", ap, source, out );
 	va_end( ap );
+    printf("vips_jpegload_source>>>>\n");
 
 	return( result );
 }

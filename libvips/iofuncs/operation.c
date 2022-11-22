@@ -931,7 +931,7 @@ vips_call_by_name( const char *operation_name,
 {
 	VipsOperation *operation;
 	int result;
-
+    printf("vips_call_by_name<<<< %s \n", operation_name);
 	VIPS_DEBUG_MSG( "vips_call_by_name: starting for %s ...\n", 
 		operation_name );
 
@@ -966,7 +966,9 @@ vips_call_by_name( const char *operation_name,
 	 */
 	g_object_unref( operation );
 
-	return( result );
+    printf("vips_call_by_name>>> %s \n", operation_name);
+
+    return( result );
 }
 
 /**

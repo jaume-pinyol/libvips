@@ -673,6 +673,7 @@ vips_image_sanity_downstream( VipsImage *down, VipsImage *up, void *b )
 static void
 vips_image_sanity( VipsObject *object, VipsBuf *buf )
 {
+    printf("vips_image_sanity<<<\n");
 	VipsImage *image = VIPS_IMAGE( object );
 
 	/* All 0 means im has been inited but never used.
@@ -682,8 +683,10 @@ vips_image_sanity( VipsObject *object, VipsBuf *buf )
 		image->Bands != 0 ) {
 		if( image->Xsize <= 0 || 
 			image->Ysize <= 0 || 
-			image->Bands <= 0 ) 
-			vips_buf_appends( buf, "bad dimensions\n" );
+			image->Bands <= 0 ) {
+            printf("bad dim x:%d, y:%d, bands:%d\n", image->Xsize, image->Ysize, image->Bands);
+            vips_buf_appends(buf, "bad dimensions\n");
+        }
 		if( image->BandFmt < -1 || 
 			image->BandFmt > VIPS_FORMAT_DPCOMPLEX ||
 			(image->Coding != -1 &&
@@ -692,11 +695,14 @@ vips_image_sanity( VipsObject *object, VipsBuf *buf )
 				image->Coding != VIPS_CODING_RAD) ||
 			image->Type >= VIPS_INTERPRETATION_LAST ||
 			image->dtype > VIPS_IMAGE_PARTIAL || 
-			image->dhint > VIPS_DEMAND_STYLE_ANY ) 
+			image->dhint > VIPS_DEMAND_STYLE_ANY )
+            printf("bad enum\n");
 			vips_buf_appends( buf, "bad enum\n" );
 		if( image->Xres < 0 || 
-			image->Yres < 0 ) 
-			vips_buf_appends( buf, "bad resolution\n" );
+			image->Yres < 0 ) {
+            printf("bad resolution\n");
+            vips_buf_appends(buf, "bad resolution\n");
+        }
 	}
 
 	/* Must lock around inter-image links.
@@ -704,15 +710,23 @@ vips_image_sanity( VipsObject *object, VipsBuf *buf )
 	g_mutex_lock( vips__global_lock );
 
 	if( vips_slist_map2( image->upstream, 
-		(VipsSListMap2Fn) vips_image_sanity_upstream, image, NULL ) )
-		vips_buf_appends( buf, "upstream broken\n" );
+		(VipsSListMap2Fn) vips_image_sanity_upstream, image, NULL ) ) {
+        printf("upstream broken\n");
+
+        vips_buf_appends(buf, "upstream broken\n");
+    }
 	if( vips_slist_map2( image->downstream, 
-		(VipsSListMap2Fn) vips_image_sanity_downstream, image, NULL ) )
-		vips_buf_appends( buf, "downstream broken\n" );
+		(VipsSListMap2Fn) vips_image_sanity_downstream, image, NULL ) ) {
+        printf("downstream broken\n");
+
+        vips_buf_appends(buf, "downstream broken\n");
+    }
 
 	g_mutex_unlock( vips__global_lock );
-
 	VIPS_OBJECT_CLASS( vips_image_parent_class )->sanity( object, buf );
+
+    printf("vips_image_sanity>>>\n");
+
 }
 
 static void
